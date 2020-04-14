@@ -191,8 +191,14 @@ test_that("Check values in the array", {
 
 #### Check if libraries are part of the path ####
 
+if (getJavaVersion()$architecture == "32-Bit") {
+  expectedJar <- "j4r_x86.jar"
+} else {
+  expectedJar <- "j4r.jar"
+}
+
 test_that("Check the return value of checkIfClasspathContains", {
-  expect_equal(checkIfClasspathContains("j4r.jar"), TRUE)
+  expect_equal(checkIfClasspathContains(expectedJar), TRUE)
   expect_equal(checkIfClasspathContains("lerfob-foresttools.jar"), FALSE)
 })
 
@@ -389,24 +395,6 @@ test_that("Testing that the number of columns was correctly retrieved a Matrix i
   expect_equal(newNbColumns, c(10,7))
 })
 
-#### Testing that two calls to connectToJava will not affect the socket connection ####
-
-callback <- connectToJava()
-test_that("Testing that the second call to connectToJava returns FALSE", {
-  expect_equal(callback, FALSE)
-})
-
-
-versionIn <- getJavaVersion()
-
-####  Shutting down Java ####
-
-# The server is shutted down through the shutdownJava function:
-
 shutdownJava()
 
-versionOut <- getJavaVersion()
 
-test_that("Testing that the getJavaVersion gives the same result whether or not the server is online", {
-  expect_equal(versionIn, versionOut)
-})

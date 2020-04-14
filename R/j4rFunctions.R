@@ -1,39 +1,9 @@
 ########################################################
-# R function for connection to Gateway Server in Java
+# R functions for connection to Gateway Server in Java
 # Author: Mathieu Fortin, Canadian Wood Fibre Centre
 # Date: January 2019
 ########################################################
 
-#'
-#' The cache environment of this package
-#'
-#' This environment contains the objects that enable the connection to
-#' the gateway server.
-#'
-#'@export
-cacheEnv <- new.env()
-
-#'
-#' Length of the buffer when reading from the socket connection.
-#'
-#' The buffer has a length of 100Kb by default.
-#'
-#' @export
-bufferLength <- 100000
-
-MainSplitter <- "/;"
-SubSplitter <- "/,"
-ExceptionPrefix <- "j4r.net.server.JavaLocalGatewayServer$JavaGatewayException"
-
-
-
-#'
-#' Maximum length of the vector in the parameters.
-#'
-#' A maximum length of the vector is set in order to avoid buffer size issues when reading
-#'
-#' @export
-maxVectorLength <- 200
 
 #'
 #' Connect to Java environment
@@ -45,15 +15,17 @@ maxVectorLength <- 200
 #' @param memorySize the memory size of the Java Virtual Machine in Mb (if not specified, the JVM runs with the default memory size)
 #' @param debug for debugging only (should be left as is)
 #'
-#' @return nothing
+#' @return a logical TRUE if the function managed to get connected to the server or if it was already connected or
+#' FALSE if the connection has failed
 #'
 #' @export
 connectToJava <- function(port = 18011, extensionPath = NULL, memorySize = NULL, debug = FALSE) {
   if (isConnectedToJava()) {
     message("The object j4rSocket already exists! It seems R is already connected to the Java server.")
-    return(FALSE)
+    return(TRUE)
   } else {
     if (!debug) {
+      message(.checkJavaVersionRequirement())
       message("Starting Java server...")
       parms <- c("-firstcall", "true")
       if (port != 18011) {
@@ -74,15 +46,45 @@ connectToJava <- function(port = 18011, extensionPath = NULL, memorySize = NULL,
         rootPath <- paste(find.package("J4R"), "java", sep="/")
       }
       #    message(rootPath)
-      path <- paste(rootPath,"j4r.jar",sep="/")
-      completeCommand <- paste("java -jar", path, paste(parms, collapse=" "), sep = " ")
+      architecture <- suppressMessages(getJavaVersion()$architecture)
+      if (architecture == "32-Bit") {
+        jarFilename <- "j4r_x86.jar"
+        message("Running the 32-Bit version")
+      } else {
+        jarFilename <- "j4r.jar"
+      }
+      path <- paste(rootPath, jarFilename, sep="/")
+      completeCommand <- paste(.getJavaPath(), "-jar", path, paste(parms, collapse=" "), sep = " ")
       system(completeCommand, wait=FALSE)
-      Sys.sleep(2)
+      Sys.sleep(2.5)  ### MF2020-04-13 changed from 2 to 2.5 sec because some systems such as Fedora seem to take more time to instantiate the server
     }
     message(paste("Connecting on port", port))
-    assign("j4rSocket", utils::make.socket("localhost", port), envir = cacheEnv)
-    utils::read.socket(.getMainSocket(), maxlen = bufferLength)
-    return(TRUE)
+    isConnected <- tryCatch(
+      {
+        assign("j4rSocket", utils::make.socket("localhost", port), envir = cacheEnv)
+        utils::read.socket(.getMainSocket(), maxlen = bufferLength)
+        return(TRUE)
+      },
+      error=function(cond) {
+        message("It seems the instantiation of the server is taking more time than expected...")
+        message("J4R will attempt to get connected one more time...")
+        Sys.sleep(2) ### wait again before trying to connect to the server
+        isConn <- tryCatch(
+          {
+            assign("j4rSocket", utils::make.socket("localhost", port), envir = cacheEnv)
+            utils::read.socket(.getMainSocket(), maxlen = bufferLength)
+            return(TRUE)
+          },
+          error=function(cond) {
+            message("Unable to get connected to the Java server.")
+            message("Either the server instantiation failed or the current port is used by another application.")
+            return(FALSE)
+          }
+        )
+        return(isConn)
+      }
+    )
+    return(isConnected)
   }
 }
 
@@ -622,9 +624,12 @@ callJavaMethod <- function(source, methodName, ...) {
 #' @export
 shutdownJava <- function() {
   .killJava()
-  message("Your global environment may now contain some useless Java references.")
-  message("To delete them, you can use the following line of code:")
-  message("rm(list = getListOfJavaReferences())")
+  listJavaReferences <- getListOfJavaReferences()
+  if (!is.null(listJavaReferences) & length(listJavaReferences) > 0) {
+    message("Your global environment now contains some useless Java references.")
+    message("To delete them, you can use the following line of code:")
+    message("rm(list = getListOfJavaReferences())")
+  }
 }
 
 .internalShutdown <- function() {
@@ -726,58 +731,6 @@ getClassLoaderURLs <- function() {
   return(urlsList)
 }
 
-#'
-#' Returns the Java version
-#'
-#' @export
-getJavaVersion <- function() {
-  if (isConnectedToJava()) {
-    javaVersion <- callJavaMethod("java.lang.System","getProperty","java.version")
-    return(javaVersion)
-  } else {
-    output <- system2("java", args = c("-version"), stdout = T, stderr = T, wait = F)
-    javaVersion <- substring(output[1], first=regexpr("\"", output[1])[[1]] + 1)
-    javaVersion <- substring(javaVersion, first=1, last = regexpr("\"", javaVersion)[[1]] - 1)
-    return(javaVersion)
-  }
-}
-
-
-#'
-#' Returns the maximum, total and free memory in Mb
-#'
-#' This function calls the Runtime static methods maxMemory(),
-#' totalMemory() and freeMemory(). The results are divided by
-#' 1024 in order to report the memory sizes in Mb.
-#' @return a data.frame object with the maximum, total and free memory in Mb.
-#'
-#' @export
-getMemorySettings <- function() {
-  runtime <- callJavaMethod("java.lang.Runtime", "getRuntime")
-  maxMemory <- callJavaMethod(runtime, "maxMemory") / 1024^2
-  totalMemory <- callJavaMethod(runtime, "totalMemory")  / 1024^2
-  freeMemory <- callJavaMethod(runtime, "freeMemory")  / 1024^2
-  return(data.frame(maxMemory, totalMemory, freeMemory))
-}
-
-.onUnload <- function(libpath) {
-  .internalShutdown()
-}
-
-.onDetach <- function(libpath) {
-  .internalShutdown()
-}
-
-.welcomeMessage <- function() {
-  packageStartupMessage("Welcome to J4R!")
-  packageStartupMessage("Please, make sure that Java (version 8 or later) is part of the path.")
-  packageStartupMessage("For more information, visit https://sourceforge.net/p/repiceasource/wiki/J4R/ .")
-}
-
-
-.onAttachLoad <- function(libname, pkgname) {
-  .welcomeMessage()
-}
 
 #'
 #' Check if a Library has been loaded
@@ -819,9 +772,16 @@ checkIfClasspathContains <- function(myJavaLibrary) {
 }
 
 .killJava <- function() {
-  emergencySocket <- utils::make.socket("localhost", 50000)
-  utils::read.socket(emergencySocket, maxlen = bufferLength)
-  utils::write.socket(socket = emergencySocket, "emergencyShutdown")
+  tryCatch(
+    {
+      emergencySocket <- utils::make.socket("localhost", 50000)
+      utils::read.socket(emergencySocket, maxlen = bufferLength)
+      utils::write.socket(socket = emergencySocket, "emergencyShutdown")
+    },
+    error=function(cond) {
+      message("Unable to contact the server. It might be already down!")
+    }
+  )
   .internalShutdown()
   Sys.sleep(2)  ### wait two seconds to make sure the server is really shut down
   message("Done.")
@@ -853,6 +813,5 @@ addUrlToClassPath <- function(urlString, packageName = NULL) {
     message("The Java server is not running.")
   }
 }
-
 
 
