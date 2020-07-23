@@ -4,108 +4,36 @@
 # Date: January 2019
 ########################################################
 
+createCommandToken <- "co"
+createNullArrayToken <- "cona"
+createNullToken <- "conu"
+createArrayToken <- "coar"
+classInfoToken <- "cli"
 
-#'
-#' Connect to Java environment
-#'
-#' This function connects the R environment to a gateway server that runs in Java.
-#'
-#' @param port the local port (the port is set to 18011 by default)
-#' @param extensionPath the path to jar files that can be loaded by the system classloader
-#' @param memorySize the memory size of the Java Virtual Machine in Mb (if not specified, the JVM runs with the default memory size)
-#' @param debug for debugging only (should be left as is)
-#'
-#' @return a logical TRUE if the function managed to get connected to the server or if it was already connected or
-#' FALSE if the connection has failed
-#'
-#' @export
-connectToJava <- function(port = 18011, extensionPath = NULL, memorySize = NULL, debug = FALSE) {
-  if (isConnectedToJava()) {
-    message("The object j4rSocket already exists! It seems R is already connected to the Java server.")
-    return(TRUE)
-  } else {
-    if (!debug) {
-      message(.checkJavaVersionRequirement())
-      message("Starting Java server...")
-      parms <- c("-firstcall", "true")
-      if (port != 18011) {
-        parms <- c(parms, "-port", port)
-      }
-      if (!is.null(extensionPath)) {
-        parms <- c(parms, "-ext", extensionPath)
-      }
-      if (!is.null(memorySize)) {
-        if (!is.numeric(memorySize) && !is.integer(memorySize)) {
-          stop("The memorySize parameter should be either a numeric or an integer!")
-        }
-        parms <- c(parms, "-mem", as.integer(memorySize))
-      }
-      if (file.exists(paste(find.package("J4R"),"inst/java/j4r.jar", sep="/"))) {  ### test mode
-        rootPath <- paste(find.package("J4R"),"inst", "java", sep="/")
-      } else {  ### normal mode
-        rootPath <- paste(find.package("J4R"), "java", sep="/")
-      }
-      #    message(rootPath)
-      architecture <- suppressMessages(getJavaVersion()$architecture)
-      if (architecture == "32-Bit") {
-        jarFilename <- "j4r_x86.jar"
-        message("Running the 32-Bit version")
-      } else {
-        jarFilename <- "j4r.jar"
-      }
-      path <- paste(rootPath, jarFilename, sep="/")
-      completeCommand <- paste(.getJavaPath(), "-jar", path, paste(parms, collapse=" "), sep = " ")
-      system(completeCommand, wait=FALSE)
-      Sys.sleep(2.5)  ### MF2020-04-13 changed from 2 to 2.5 sec because some systems such as Fedora seem to take more time to instantiate the server
-    }
-    message(paste("Connecting on port", port))
-    isConnected <- tryCatch(
-      {
-        assign("j4rSocket", utils::make.socket("localhost", port), envir = cacheEnv)
-        utils::read.socket(.getMainSocket(), maxlen = bufferLength)
-        return(TRUE)
-      },
-      error=function(cond) {
-        message("It seems the instantiation of the server is taking more time than expected...")
-        message("J4R will attempt to get connected one more time...")
-        Sys.sleep(2) ### wait again before trying to connect to the server
-        isConn <- tryCatch(
-          {
-            assign("j4rSocket", utils::make.socket("localhost", port), envir = cacheEnv)
-            utils::read.socket(.getMainSocket(), maxlen = bufferLength)
-            return(TRUE)
-          },
-          error=function(cond) {
-            message("Unable to get connected to the Java server.")
-            message("Either the server instantiation failed or the current port is used by another application.")
-            return(FALSE)
-          }
-        )
-        return(isConn)
-      }
-    )
-    return(isConnected)
-  }
-}
+numericToken <- "nu"
+integerToken <- "in"
+logicalToken <- "lo"
+characterToken <- "ch"
+javaObjectToken <- "JO"
+javaListToken <- "JL"
+javaListAndMainSplitterToken <- paste(javaListToken, MainSplitter, sep="")
 
-.getMainSocket <- function() {
-  return(get("j4rSocket", envir = cacheEnv))
-}
+numericTokenLength <- nchar(numericToken) + 1
+integerTokenLength <- nchar(integerToken) + 1
+logicalTokenLength <- nchar(logicalToken) + 1
+characterTokenLength <- nchar(characterToken) + 1
+javaListAndMainSplitterTokenLength <- nchar(javaListAndMainSplitterToken) + 1
 
-.getClass <- function(obj) {
-  vector <- class(obj)
-  return(vector[length(vector)])
-}
+portSplitter <- ":"
+
 
 .translateJavaObject <- function(javaObject) {
-  hashcode <- c()
-  clazz <- .getClass(javaObject)
-  if (clazz == "java.list") {
-    for (i in 1:length(javaObject)) {
-      hashcode <- c(hashcode, as.character(javaObject[[i]]$hashcode))
-    }
-  } else if (clazz == "java.object") {
-    hashcode <- as.character(javaObject$hashcode)
+  if (methods::is(javaObject, "java.list")) {
+    hashcode <- sapply(javaObject$.innerList, function(obj) {
+      as.character(obj$.hashcode)
+    })
+  } else if (methods::is(javaObject, "java.object")) {
+    hashcode <- as.character(javaObject$.hashcode)
   } else {
     stop(".translateJavaObject: the argument should be an instance of java.object or java.list")
   }
@@ -113,19 +41,14 @@ connectToJava <- function(port = 18011, extensionPath = NULL, memorySize = NULL,
   return(str)
 }
 
-
 .getParametersLength <- function(parameters) {
   maxLength <- 0
   if (length(parameters) > 0) {
-    for (i in 1:length(parameters)) {
-      if (.getClass(parameters[[i]]) == "java.object") {
-        thisParameterLength <- 1
-      } else {
-        thisParameterLength <- length(parameters[[i]])
-      }
+#    for (i in 1:length(parameters)) {
+    for (parm in parameters) {
+      thisParameterLength <- length(parm)
       if (thisParameterLength >= maxLength) {
-        maxLength <- length(parameters[[i]])
-        #        stop(paste("The J4R package allows for vectors than do not exceed", maxVectorLength, "in length. You can use a loop instead.", sep=" "))
+        maxLength <- thisParameterLength
       } else if (thisParameterLength > 1) {
         stop("The parameters are not consistent! Those with sizes greater than 1 should all have the same size!")
       }
@@ -136,29 +59,13 @@ connectToJava <- function(port = 18011, extensionPath = NULL, memorySize = NULL,
 
 
 .getSourceLength <- function(source, parametersLength) {
-  if (.getClass(source) == "java.object") {   ### a single java.object instance has a length of 1
-    sourceLength <- 1
-  } else { ## either a java.list or a vector
     lengthSource <- length(source)
     if (lengthSource > 1 && parametersLength > 1 && lengthSource != parametersLength) {
       stop("The length of the java.list object or the vector is inconsistent with the length of the parameters!")
     } else {
       sourceLength <- length(source)
     }
-  }
   return(sourceLength)
-}
-
-#'
-#' Checks if the Java server is running
-#'
-#' This is done by checking f the socket connection to the JVM exists.
-#'
-#' @return a logical
-#'
-#' @export
-isConnectedToJava <- function() {
-  return(exists("j4rSocket", envir = cacheEnv))
 }
 
 
@@ -166,16 +73,19 @@ isConnectedToJava <- function() {
 #' Create Java objects
 #'
 #' This function creates one or many object of a particular class. If the parameters
-#' contain vectors, then a series of instances of this class can be created.
+#' contain vectors, then a series of instances of this class can be created. Primitive
+#' type are converted on the fly, numeric to double, integer to int,
+#' logical to boolean and character to String. Factors are also converted to String.
 #'
 #' @param class the Java class of the object (e.g. java.util.ArrayList)
 #' @param ... the parameters to be passed to the constructor of the object
 #' @param isNullObject a logical that indicates whether the instance should be null (by default it is set to FALSE)
 #' @param isArray a logical that indicates whether the instance is an array. By default, it is set to FALSE. When creating an array, the parameters must be integers that define the dimensions of the array
+#' @param affinity a parameter used by the mclapply.j4r function in case of multithreading.
 #' @return a java.object or java.list instance in the R environment
 #' @examples
 #' ### starting Java
-#' connectToJava()
+#' connectToJava(memorySize = 200)
 #'
 #' ### creating an empty ArrayList object
 #' createJavaObject("java.util.ArrayList")
@@ -198,18 +108,18 @@ isConnectedToJava <- function() {
 #' @seealso \href{https://sourceforge.net/p/repiceasource/wiki/J4R/}{J4R webpage}
 #'
 #' @export
-createJavaObject <- function(class, ..., isNullObject = FALSE, isArray = FALSE) {
+createJavaObject <- function(class, ..., isNullObject = FALSE, isArray = FALSE, affinity = 1) {
   parameters <- list(...)
   parametersLength <- .getParametersLength(parameters)
-  firstCommand <- "create"
+  firstCommand <- createCommandToken
   if (isNullObject) {
     if (isArray) {
-      firstCommand <- "createnullarray"
+      firstCommand <- createNullArrayToken
     } else {
-      firstCommand <- "createnull"
+      firstCommand <- createNullToken
     }
   } else if (isArray) {
-    firstCommand <- "createarray"
+    firstCommand <- createArrayToken
   }
 
   nbCalls <- ceiling(parametersLength / maxVectorLength)
@@ -217,7 +127,7 @@ createJavaObject <- function(class, ..., isNullObject = FALSE, isArray = FALSE) 
     nbCalls <- 1
   }
   basicCommand <- paste(firstCommand, class, sep=MainSplitter)
-  javaList <- NULL
+  output <- NULL
   for (i in 1:nbCalls) {
     if (parametersLength > 0) {
       lowerIndex <- (i-1) * maxVectorLength + 1
@@ -229,85 +139,57 @@ createJavaObject <- function(class, ..., isNullObject = FALSE, isArray = FALSE) 
     } else {
       command <- basicCommand
     }
-    utils::write.socket(.getMainSocket(), command)
-    callback <- utils::read.socket(.getMainSocket(), maxlen = bufferLength)
-    .checkForExceptionInCallback(callback)
-    # if(regexpr("Exception", callback) >= 0) {
-    #   stop(callback)
-    # } else {
-    if (parametersLength <= 1) {
-      return(.createFakeJavaObject(callback)) ## a single object
-    } else {
-      if (is.null(javaList)) {
-        javaList <- .createFakeJavaObject(callback)
-      } else {
-        javaList <- .dropAllIntoFirstList(javaList, .createFakeJavaObject(callback))
-      }
-    }
-    # }
+    utils::write.socket(.getSocket(affinity), command)
+    callback <- utils::read.socket(.getSocket(affinity), maxlen = bufferLength)
+    output <- .processResult(callback, output, affinity)
   }
-  return(javaList)
+  return(output)
 }
 
+
 .checkForExceptionInCallback <- function(callback) {
-  if(startsWith(callback, ExceptionPrefix)) {
+  if (startsWith(callback, ExceptionPrefix)) {
     stop(substring(callback, nchar(ExceptionPrefix) + 2))
   }
 }
 
-.dropAllIntoFirstList <- function(javaList, javaSomething) {
-  initialLength <- length(javaList)
-  if (.getClass(javaSomething) == "java.object") {
-    javaList[[initialLength + 1]] <- javaSomething
-  } else { ### dealing with a list of java object
-    lengthIncomingList <- length(javaSomething)
-    for (i in 1:lengthIncomingList) {
-      javaList[[initialLength + i]] <- javaSomething[[i]]
-    }
-  }
-  return(javaList)
-}
 
 .marshallCommand <- function(list, lowerBoundIndex, upperBoundIndex) {
-  command <- NULL
-  for (i in 1:length(list)) {
-    parm <- list[[i]]
+  subCommands <- unlist(lapply(list, function(parm) {
     l <- length(parm)
-    if (.getClass(parm) == "java.object") { ## it should not be set to 2
-      l <- 1
-    }
     if (l > 1) {
       if (upperBoundIndex > l) {
         stop("The upperBoundIndex paramerer is larger than the size of the parameter!")
       }
-      if (.getClass(parm) == "java.list") {
-        parm <- .getSubsetOfJavaArrayList(parm, lowerBoundIndex, upperBoundIndex)
-      } else {
-        parm <- parm[lowerBoundIndex:upperBoundIndex]
-      }
+      parm <- parm[lowerBoundIndex:upperBoundIndex]
     }
-    class <- .getClass(parm)
-    if (class == "java.object" || class == "java.list") {
+    class <- class(parm)[1]
+    if (methods::is(parm, "java.object") || methods::is(parm, "java.list")) {
       class <- "java.object"
       parm <- .translateJavaObject(parm)
+    } else if (methods::is(parm, "factor")) {
+      class <- "character"
+      parm <- as.character(parm)
     }
     subCommand <- paste(class, paste(parm,collapse=SubSplitter), sep="")
-    if (is.null(command)) {
-      command <- subCommand
-    } else {
-      command <- paste(command, subCommand, sep=MainSplitter)
-    }
-  }
+  }), use.names = F)
+  command <- paste(subCommands, collapse = MainSplitter)
   return(command)
 }
 
 .constructSourcePartCommand <- function(prefix, source, sourceLength, targetName, lowerIndex, upperIndex) {
-  if (.getClass(source) %in% c("java.object")) {   ### non-static method
+  if (methods::is(source, "java.object")) {   ### non-static method
     command <- paste(prefix, paste("java.object", .translateJavaObject(source), sep=""), targetName, sep=MainSplitter)
-  } else if (.getClass(source) %in% c("java.list")) {   ### non-static method
-    subList <- .getSubsetOfJavaArrayList(source, lowerIndex, upperIndex)
-    command <- paste(prefix, paste("java.object", .translateJavaObject(subList), sep=""), targetName, sep=MainSplitter)
-  } else {  ### static method
+  } else if (methods::is(source, "java.list")) {   ### non-static method
+    # subList <- .getSubsetOfJavaArrayList(source, lowerIndex, upperIndex)
+    # command <- paste(prefix, paste("java.object", .translateJavaObject(subList), sep=""), targetName, sep=MainSplitter)
+    command <- paste(prefix, paste("java.object", .translateJavaObject(source[lowerIndex:upperIndex]), sep=""), targetName, sep=MainSplitter)
+  } else {  ### static method or primitive
+    clazz <- class(source)
+    if (clazz == "factor") {
+      clazz <- "character"
+      source <- as.character(source)
+    }
     if (sourceLength == 1) {
       command <- paste(prefix, paste(class(source), source, sep=""), targetName, sep=MainSplitter)
     } else {
@@ -323,12 +205,15 @@ createJavaObject <- function(class, ..., isNullObject = FALSE, isArray = FALSE) 
 #' This function gets the value of a particular field, which can be either static or not. If the field is static,
 #' the source should be a valid class name.
 #'
+#' When the source is a java.object instance, this function can be substituted for the $ operator.
+#'
 #' @param source this should be either a java.list instance or a single java.object instance for non-static methods or
 #' a string representing the Java class name in case of static method
 #' @param fieldName the name of the field to be set
+#' @param affinity a parameter used by the mclapply.j4r function in case of multithreading.
 #'
 #' @export
-getJavaField <- function(source, fieldName) {
+getJavaField <- function(source, fieldName, affinity = 1) {
   if (length(fieldName) != 1) {
     stop("The function getJavaField can only take a single field name!" )
   }
@@ -351,22 +236,9 @@ getJavaField <- function(source, fieldName) {
 
     command <- .constructSourcePartCommand("field", source, sourceLength, fieldName, lowerIndex, upperIndex)
 
-    utils::write.socket(.getMainSocket(), command)
-    callback <- utils::read.socket(.getMainSocket(), maxlen=bufferLength)
-    result <- .processCallback(callback)
-    if (maxLength == 1) {
-      return(result)
-    } else {
-      if (is.null(output)) {
-        output <- result
-      } else {
-        if (.getClass(output) == "java.list") {
-          output <- .dropAllIntoFirstList(output, result)
-        } else {
-          output <- c(output, result)
-        }
-      }
-    }
+    utils::write.socket(.getSocket(affinity), command)
+    callback <- utils::read.socket(.getSocket(affinity), maxlen=bufferLength)
+    output <- .processResult(callback, output, affinity)
   }
   return(output)
 }
@@ -379,13 +251,16 @@ getJavaField <- function(source, fieldName) {
 #' This function sets a particular field, which can be either static or not. If the field is static,
 #' the source should be a valid class name.
 #'
+#' When the source is a java.object instance, this function can be substituted for the $ operator.
+#'
 #' @param source this should be either a java.list instance or a single java.object instance for non-static methods or
 #' a string representing the Java class name in case of static method
 #' @param fieldName the name of the field to be set
 #' @param value the new value of the field
+#' @param affinity a parameter used by the mclapply.j4r function in case of multithreading.
 #'
 #' @export
-setJavaField <- function(source, fieldName, value) {
+setJavaField <- function(source, fieldName, value, affinity = 1) {
   parameters <- list(value)
   parametersLength <- .getParametersLength(parameters)
   maxLength <- parametersLength
@@ -413,24 +288,16 @@ setJavaField <- function(source, fieldName, value) {
         command <- paste(command, .marshallCommand(parameters, lowerIndex, upperIndex), sep=MainSplitter)
       }
     }
-    utils::write.socket(.getMainSocket(), command)
-    callback <- utils::read.socket(.getMainSocket(), maxlen=bufferLength)
-    result <- .processCallback(callback)
-    if (maxLength == 1) {
-      return(result)
-    } else {
-      if (is.null(output)) {
-        output <- result
-      } else {
-        if (.getClass(output) == "java.list") {
-          output <- .dropAllIntoFirstList(output, result)
-        } else {
-          output <- c(output, result)
-        }
-      }
-    }
+    utils::write.socket(.getSocket(affinity), command)
+    callback <- utils::read.socket(.getSocket(affinity), maxlen=bufferLength)
+    output <- .processResult(callback, output, affinity)
   }
-  return(output)
+  if (!is.null(output)) {
+    warning("The Java server has returned something else than NULL!")
+    return(output)
+  } else {
+    return(invisible(output))
+  }
 }
 
 
@@ -442,16 +309,21 @@ setJavaField <- function(source, fieldName, value) {
 #' instances can be returned.
 #'
 #' There is no need to cast a particular parameter to a super class. Actually, the Java server tries to find the method
-#' that best matches the types of the parameters
+#' that best matches the types of the parameters. Primitive type are converted on the fly, numeric to double, integer to int,
+#' logical to boolean and character to String. Factors are also converted to String.
+#'
+#' When the source is a java.object instance, this function can be substituted for the $ operator.
 #'
 #' @param source this should be either a java.list instance or a single java.object instance for non-static methods or
 #' a string representing the Java class name in case of static method
 #' @param methodName the name of the method
 #' @param ... the parameters of the method
+#' @param affinity a parameter used by the mclapply.j4r function in case of multithreading.
 #' @return It depends on the method. It can return a primitive type (or a vector of primitive), a Java instance (or a list of Java instances) or nothing at all.
+#'
 #' @examples
 #' ### starting Java
-#' connectToJava()
+#' connectToJava(memorySize = 200)
 #'
 #' ### creating an empty ArrayList object
 #' myList <- createJavaObject("java.util.ArrayList")
@@ -459,13 +331,16 @@ setJavaField <- function(source, fieldName, value) {
 #' ### adding 3 to the list
 #' callJavaMethod(myList, "add", 3)
 #'
+#' ### adding 5 to the list
+#' myList$add(3)
+#'
 #' ### shutting down Java
 #' shutdownJava()
 #'
 #' @seealso \href{https://sourceforge.net/p/repiceasource/wiki/J4R/}{J4R webpage}
 #'
 #' @export
-callJavaMethod <- function(source, methodName, ...) {
+callJavaMethod <- function(source, methodName, ..., affinity = 1) {
   parameters <- list(...)
   parametersLength <- .getParametersLength(parameters)
   maxLength <- parametersLength
@@ -494,38 +369,40 @@ callJavaMethod <- function(source, methodName, ...) {
         command <- paste(command, .marshallCommand(parameters, lowerIndex, upperIndex), sep=MainSplitter)
       }
     }
-    utils::write.socket(.getMainSocket(), command)
-    callback <- utils::read.socket(.getMainSocket(), maxlen=bufferLength)
-    result <- .processCallback(callback)
-    if (maxLength == 1) {
-      return(result)
+    utils::write.socket(.getSocket(affinity), command)
+    callback <- utils::read.socket(.getSocket(affinity), maxlen=bufferLength)
+    output <- .processResult(callback, output, affinity)
+  }
+  if (is.null(output)) {
+    return(invisible(output))
+  } else {
+    return(output)
+  }
+  return(output)
+}
+
+.processResult <- function(callback, output, affinity = 1) {
+  result <- .processCallback(callback, affinity)
+  if (is.null(output)) {
+    output <- result
+  } else {
+    if (methods::is(output, "java.list")) {
+      output <- .addToInnerList(output, result)
     } else {
-      if (is.null(output)) {
-        output <- result
-      } else {
-        if (.getClass(output) == "java.list") {
-          output <- .dropAllIntoFirstList(output, result)
-        } else {
-          output <- c(output, result)
-        }
-      }
+      output <- c(output, result)
     }
   }
   return(output)
 }
 
-.processCallback <- function(callback) {
-#  print(paste("Processing this callback : ", callback, sep=""))
-  # if(startsWith(callback, ExceptionPrefix)) {
-  #   stop(substring(callback, nchar(ExceptionPrefix)))
-  # } else if(regexpr("Error", callback) >= 0) {
-  #   stop(callback)
+
+.processCallback <- function(callback, affinity = 1) {
   .checkForExceptionInCallback(callback)
-  if (regexpr("JavaObject", callback) >= 0) {  ## a single Java object
-    returnObject <- .createFakeJavaObject(callback)
-  } else if (regexpr("JavaList", callback) >= 0 && regexpr("@", callback) >= 0) { ## a list of Java objects
-    returnObject <- .createFakeJavaObject(callback)
-  } else if (regexpr("RequestReceivedAndProcessed", callback) >= 0) {
+  if (startsWith(callback, javaObjectToken)) {  ## a single Java object
+    returnObject <- .createJavaObjectReference(callback, affinity)
+  } else if (startsWith(callback, javaListToken) && regexpr("@", callback) >= 0) { ## a list of Java objects
+    returnObject <- .createJavaObjectReference(callback, affinity)
+  } else if (startsWith(callback, "Done")) {
     returnObject <- NULL
   } else {
     returnObject <- .translatePrimitiveType(callback)
@@ -534,284 +411,150 @@ callJavaMethod <- function(source, methodName, ...) {
 }
 
 .translatePrimitiveType <- function(str) {
-  if (regexpr(paste("JavaList", MainSplitter, sep=""), str) == 1) {
-    str <- substring(str, 11)
+  if (startsWith(str, javaListAndMainSplitterToken)) {
+    str <- substring(str, javaListAndMainSplitterTokenLength)
   }
   inputList <- strsplit(str,SubSplitter)[[1]]
-  outputVector <- list()
-  for (i in 1:length(inputList)) {
-    str <- inputList[i]
-    if (regexpr("numeric", str) == 1) { # starts with numeric
-      outputVector[[i]] <- as.numeric(substring(str,8))
-    } else if (regexpr("integer", str) == 1) { # starts with integer
-      value <- as.double(substring(str,8))  ### to avoid coercion
+  outputList <- lapply(inputList, function(str) {
+    if (startsWith(str, numericToken)) { # starts with numeric
+      return(as.numeric(substring(str, numericTokenLength)))
+    } else if (startsWith(str, integerToken)) { # starts with integer
+      value <- as.double(substring(str, integerTokenLength))  ### to avoid coercion
       if (abs(value) < 2*10^9) {
         value <- as.integer(value)
       }
-      outputVector[[i]] <- value
-    } else if (regexpr("logical", str) == 1) { # starts with logical
-      outputVector[[i]] <- as.logical(substring(str,8))
-    } else if (regexpr("character", str) == 1) { # starts with character
-      outputVector[[i]] <- as.character(substring(str, 10))
+      return(value)
+    } else if (startsWith(str, logicalToken)) { # starts with logical
+      return(as.logical(substring(str, logicalTokenLength)))
+    } else if (startsWith(str, characterToken)) { # starts with character
+      return(as.character(substring(str, characterTokenLength)))
     } else {
       stop(paste("This primitive type is not recognized:", str, sep = " "))
     }
-  }
+  })
 
-  return(.convertListToVectorIfPossible(outputVector))
+  return(unlist(outputList, use.names = F)) ### use.names set to F to improve performance
+  # return(.convertListToVectorIfPossible(outputList))
 }
 
 
-.convertListToVectorIfPossible <- function(myList) {
-  if (length(myList) > 0) {
-    outputVec <- c()
-    for (i in 1:length(myList)) {
-      if (i == 1) {
-        refClass <- class(myList[[i]])
-      } else {
-        if (class(myList[[i]]) != refClass) {
-          return(myList)
-        }
-      }
-      outputVec <- c(outputVec, myList[[i]])
-    }
-    return(outputVec)
-  } else {
-    return(myList)
-  }
-}
+# .convertListToVectorIfPossible <- function(myList) {
+#   classes <- sapply(myList, function(a) { ### check if the classes are the same to avoid coercion
+#     class(a)
+#   })
+#   if (all(classes == classes[1])) {
+#     return(unlist(myList, use.names = F)) ### use.names set to F to improve performance
+#   } else {
+#     return(myList)
+#   }
+# }
 
-.createJavaList <- function() {
-  outputList <- list()
-  class(outputList) <- c(class(outputList), "java.list")
-  return(outputList)
-}
-
-.getSubsetOfJavaArrayList <- function(javaArrayList, start, end) {
-  newList <- javaArrayList[start:end]
-  class(newList) <- c(class(newList), "java.list")
-  return(newList)
-}
-
-
-.createFakeJavaObject <- function(str) {
-  inputList <- strsplit(str,MainSplitter)
-  innerList <- strsplit(inputList[[1]][2], SubSplitter)
-  outputList <- .createJavaList()
-#  class(outputList) <- c(class(outputList), "java.list")
-  for (i in 1:length(innerList[[1]])) {
-    javaObject <- list()
-    class(javaObject) <- c(class(javaObject), "java.object")
-    arguments <- strsplit(innerList[[1]][i],"@")
-    javaObject$class <- arguments[[1]][1]
-    javaObject$hashcode <- as.integer(arguments[[1]][2])
-    outputList[[i]] <- javaObject
-  }
-  if (length(outputList) == 1) {
-    return (outputList[[1]])
-  } else {
-    return(outputList)
-  }
-}
-
-#'
-#' Shut down Java
-#'
-#' This function shuts down Java and the gateway server.
-#'
-#' @seealso \href{https://sourceforge.net/p/repiceasource/wiki/J4R/}{J4R webpage}
-#'
-#' @export
-shutdownJava <- function() {
-  .killJava()
-  listJavaReferences <- getListOfJavaReferences()
-  if (!is.null(listJavaReferences) & length(listJavaReferences) > 0) {
-    message("Your global environment now contains some useless Java references.")
-    message("To delete them, you can use the following line of code:")
-    message("rm(list = getListOfJavaReferences())")
-  }
-}
-
-.internalShutdown <- function() {
-  if (isConnectedToJava()) {
-    utils::write.socket(.getMainSocket(), "closeConnection")
-    message("Closing connection and removing socket...")
-    rm("j4rSocket", envir = cacheEnv)
-  }
-  #### Remove because CRAN policy is to left the global environment untouched
-  # nbObjectRemoved <- 0
-  # for (objectName in ls(envir = globalenv())) {
-  #   # if ("java.object" %in% class(object)) {
-  #   if (.getClass(get(objectName, envir = globalenv())) %in% c("java.object", "java.list")) {
-  #     nbObjectRemoved <- nbObjectRemoved + 1
-  #     if (nbObjectRemoved == 1) {
-  #       message("Removing Java objects from global environment...")
-  #     }
-  #     rm(list = objectName, envir = globalenv())
-  #   }
-  # }
-}
 
 #'
 #' Provide a list of the Java references
 #'
-#' The function provides the list of the Java references in the global environment.
+#' The function provides the list of the Java references in an environment.
 #'
-#' @return a vector with the names of the objects that belong to the java.object and java.list classes.
+#' By default this function provides the Java reference in the current environment. If
+#' there is no Java references then the value of the function is an empty list. If
+#' just.names is set to true, the value is a vector with the names of the instances. If false,
+#' then the function returns a list with the instances.
+#'
+#' @param envir the environment to be scanned for java.object and java.list instances. By default, it is the global
+#' environment
+#' @return a vector with the names of the instances
 #'
 #' @export
-getListOfJavaReferences <- function() {
-  output <- c()
-  for (objectName in ls(envir = globalenv())) {
-    if (.getClass(get(objectName, envir = globalenv())) %in% c("java.object", "java.list")) {
-      output <- c(output, objectName)
+getListOfJavaReferences <- function(envir = .GlobalEnv) {
+  listObjectNames <- ls(envir = envir, all.names = T)
+  javaReferenceNames <- unlist(lapply(listObjectNames, function(objName) {
+    obj <- get(objName, envir = envir)
+    if (methods::is(obj, "java.object") || methods::is(obj, "java.list")) {
+      return(objName)
+    } else {
+      return(NULL)
     }
+  }), use.names = F)
+  if (is.null(javaReferenceNames) || length(javaReferenceNames) == 0) {
+    return(c())
+  } else {
+    return(unlist(javaReferenceNames))
   }
+}
+
+
+#'
+#' Using multithreading with J4R
+#'
+#' Applies the mclapply function in the context of
+#' the J4R package.
+#'
+#' Multithreading a function requires that the Java code is
+#' thread safe. The server must listen to at least two ports.
+#' Otherwise, this function will reduce to a single thread.
+#' Each port is given an affinity to an R thread.
+#'
+#' The multithreading is not available on Windows. In such a case, the function
+#' will proceed in a single thread. The $ operator should not be used to substitute
+#' the getJavaField and setJavaField functions because it does not allow for the
+#' specification of the affinity. Use the original getJavaField and setJavaField functions.
+#' The $ operator can be used to call functions though as in the example below.
+#'
+#' @seealso mclapply in the parallel package
+#'
+#' @param X a vector of numerics
+#' @param FUN a two-argument function. The first argument is called by
+#' the mclapply function and the second argument defines the affinity and MUST
+#' be used in all the calls to the createJavaObject, callJavaMethod,
+#' getJavaField and setJavaField functions.
+#' @param ... optional arguments to FUN (see mclapply)
+#' @param nbCores the number of threads to be used. By default, this argument is set
+#' to the number of available connections.
+#'
+#' @seealso \code{\link{getNbConnections}}
+#'
+#' @examples
+#' \dontrun{
+#' f <- function(i, aff) {
+#'    myArrayList <- createJavaObject("java.util.ArrayList", affinity = aff)
+#'    myArrayList$add(5, affinity = aff)
+#' }
+#'
+#' result <- mclapply.j4r(1:1000, f)
+#' }
+#'
+#' @export
+mclapply.j4r <- function(X, FUN, ..., nbCores = getNbConnections()) {
+  if (!is.numeric(X)) {
+    stop("The argument X should be a vector of numerics")
+  }
+  if (Sys.info()["sysname"] == "Windows") {
+    warning("The multithreading is not available on Windows. The function will proceed in a single thread.")
+    nbCores <- 1
+  } else if (nbCores > getNbConnections()) {
+    warning("The number of cores has been set to the number of ports!")
+    nbCores <- getNbConnections()
+  } else if (nbCores < 1) {
+    warning("The number of cores has been set to 1!")
+    nbCores <- 1
+  }
+  assign("delayDumpPileFlush", TRUE, envir = settingEnv)  ### we disable the garbage collection of java.object instances here to avoid concurrent exceptions in R
+  f <- function(i) {
+    affinity <- (i-1)%%nbCores + 1
+    FUN(i,affinity)
+  }
+  output <- parallel::mclapply(X, f, ..., mc.cores = nbCores)
+  assign("delayDumpPileFlush", FALSE, envir = settingEnv) ### we re enable the garbage collection of java.object instances afterwards
   return(output)
 }
 
-
-
-
-#'
-#' Synchronize the Java environment with the R environment
-#'
-#' This function synchronizes the Java environment with the R environment. Objects that
-#' are removed from the R environment are not automatically removed from the Java
-#' environment. This function scans the R environment for the java.object instance and
-#' commands the gateway server to get rid of the Java instances that are not longer referred
-#' to in the R environment.
-#'
-#' To avoid a memory leak, the function should be called on a regular basis.
-#'
-#' @param ... a list of environment instances if the method is called within a function
-#' @return An integer which is the number of Java objects still registered in the Java environment
-#'
-#' @seealso \href{https://sourceforge.net/p/repiceasource/wiki/J4R/}{J4R webpage}
-#'
-#' @export
-callJavaGC <- function(...) {
-  environments <- list(...)
-  command <- "sync"
-  for (objectName in ls(envir = globalenv())) {
-    object <- get(objectName, envir = globalenv())
-    if (.getClass(object) %in% c("java.object", "java.list")) {
-      command <- paste(command, paste("java.object",.translateJavaObject(object),sep=""), sep=MainSplitter)
-    }
-  }
-  if (length(environments) > 0) {
-    for (environment in environments) {
-      if (class(environment) == "environment") {
-        if (!identical(environment, globalenv())) {
-          for (objectName in ls(envir = environment)) {
-            object <- get(objectName, envir = environment)
-            if (.getClass(object) %in% c("java.object", "java.list")) {
-              command <- paste(command, paste("java.object",.translateJavaObject(object),sep=""), sep=MainSplitter)
-            }
-          }
-        }
-      }
-    }
-  }
-  utils::write.socket(.getMainSocket(), command)
-  callback <- utils::read.socket(.getMainSocket(), maxlen=bufferLength)
-  return(.processCallback(callback))
-}
-
-#'
-#' Retrieve the URLs of the current classloader
-#'
-#' This functions returns the URLs that are currently included
-#' in the System classloader.
-#'
-#' @export
-getClassLoaderURLs <- function() {
-  urls <- callJavaMethod("j4r.lang.J4RSystem", "getClassPathURLs")
-  urlsList <- getAllValuesFromListObject(urls)
-  return(urlsList)
-}
-
-
-#'
-#' Check if a Library has been loaded
-#'
-#' It checks if a particular library is part of the classpath.
-#'
-#' @param myJavaLibrary a character string that stands for the java library (e.g. repicea.jar)
-#'
-#' @export
-checkIfClasspathContains <- function(myJavaLibrary) {
-  if (isConnectedToJava()) {
-    listURLs <- getClassLoaderURLs()
-    isLibIn <- FALSE
-    if (length(listURLs) > 1) {
-      for (i in 1:length(listURLs)) {
-        if (grepl(myJavaLibrary, listURLs[i])) {
-          isLibIn <- TRUE
-          break
-        }
-      }
-    } else {
-      isLibIn <- grepl(myJavaLibrary, listURLs)
-    }
-    return(isLibIn)
-  } else {
-    message("The Java server is not running.")
-  }
-}
-
-.getLibraryPath <- function(packageName, myJavaLibrary) {
-  if (file.exists(paste(find.package(packageName), "inst", myJavaLibrary, sep="/"))) {  ### test mode
-    filePath <- paste(find.package(packageName), "inst", myJavaLibrary, sep="/")
-  } else if (file.exists(paste(find.package(packageName), myJavaLibrary, sep="/"))) {  ### normal mode
-    filePath <- paste(find.package(packageName), myJavaLibrary, sep="/")
-  } else {
-    filePath <- NULL
-  }
-  return(filePath)
-}
-
-.killJava <- function() {
-  tryCatch(
-    {
-      emergencySocket <- utils::make.socket("localhost", 50000)
-      utils::read.socket(emergencySocket, maxlen = bufferLength)
-      utils::write.socket(socket = emergencySocket, "emergencyShutdown")
-    },
-    error=function(cond) {
-      message("Unable to contact the server. It might be already down!")
-    }
-  )
-  .internalShutdown()
-  Sys.sleep(2)  ### wait two seconds to make sure the server is really shut down
-  message("Done.")
-}
-
-#'
-#' Dynamically adds an url to the classpath.
-#'
-#' This function makes it possible to add a directory or a JAR file
-#' to the class path. If the packageName parameter is null then the urlString
-#' parameter must be the complete path to the directory. Otherwise, it can be
-#' the name of the JAR file and the function will find the path through the package
-#' name. A non null packageName parameter is typically used in packages that rely
-#' on J4R.
-#'
-#' @param urlString a character representing the complete path to the directory or the JAR file
-#' if the packageName parameter is null. Otherwise, it can just be the name of the JAR file.
-#' @param packageName a character representing the package.
-#'
-#' @export
-addUrlToClassPath <- function(urlString, packageName = NULL) {
-  if (isConnectedToJava()) {
-    if (is.null(packageName)) {
-      callJavaMethod("j4r.lang.J4RSystem", "addToClassPath", urlString)
-    } else {
-      callJavaMethod("j4r.lang.J4RSystem", "addToClassPath", .getLibraryPath(packageName, urlString))
-    }
-  } else {
-    message("The Java server is not running.")
-  }
+.getClassInfo <- function(classname, affinity = 1) {
+  # message(paste("Affinity is", affinity))
+  command <- paste(classInfoToken, classname, sep=MainSplitter)
+  utils::write.socket(.getSocket(affinity), command)
+  callback <- utils::read.socket(.getSocket(affinity), maxlen = bufferLength)
+  output <- .processCallback(callback, affinity)
+  return(output)
 }
 
 

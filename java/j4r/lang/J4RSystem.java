@@ -33,6 +33,9 @@ import j4r.util.J4RTranslator.Language;
 
 /**
  * The REpiceaSystem offers some additional features to the System class.
+ * Among others, it allows for dynamic classpath. The methods deliberately
+ * call the system class loader and add the path to the class path at this 
+ * level.
  * @author Mathieu Fortin - November 2014
  */
 public class J4RSystem {
@@ -171,16 +174,16 @@ public class J4RSystem {
 	 */
 	public static List<String> setClassicalOptions(String[] args) {
 		if (args.length == 0) {
-			System.out.println("No parameters received.");
+//			System.out.println("No parameters received.");
 			return new ArrayList<String>();
 		} else {
 			String inputString = "";
 			for (String str : args) {
 				inputString = inputString + str + "; ";
 			}
-			System.out.println("Parameters received:" + inputString);
+//			System.out.println("Parameters received:" + inputString);
 			J4RSystem.setLanguageFromMain(args, Language.English);
-			System.out.println("Language set to: " + J4RTranslator.getCurrentLanguage().name());
+//			System.out.println("Language set to: " + J4RTranslator.getCurrentLanguage().name());
 			return Arrays.asList(args);
 		}
 	}

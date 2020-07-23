@@ -4,7 +4,13 @@
 \alias{createJavaObject}
 \title{Create Java objects}
 \usage{
-createJavaObject(class, ..., isNullObject = FALSE, isArray = FALSE)
+createJavaObject(
+  class,
+  ...,
+  isNullObject = FALSE,
+  isArray = FALSE,
+  affinity = 1
+)
 }
 \arguments{
 \item{class}{the Java class of the object (e.g. java.util.ArrayList)}
@@ -14,17 +20,21 @@ createJavaObject(class, ..., isNullObject = FALSE, isArray = FALSE)
 \item{isNullObject}{a logical that indicates whether the instance should be null (by default it is set to FALSE)}
 
 \item{isArray}{a logical that indicates whether the instance is an array. By default, it is set to FALSE. When creating an array, the parameters must be integers that define the dimensions of the array}
+
+\item{affinity}{a parameter used by the mclapply.j4r function in case of multithreading.}
 }
 \value{
 a java.object or java.list instance in the R environment
 }
 \description{
 This function creates one or many object of a particular class. If the parameters
-contain vectors, then a series of instances of this class can be created.
+contain vectors, then a series of instances of this class can be created. Primitive
+type are converted on the fly, numeric to double, integer to int,
+logical to boolean and character to String. Factors are also converted to String.
 }
 \examples{
 ### starting Java
-connectToJava()
+connectToJava(memorySize = 200)
 
 ### creating an empty ArrayList object
 createJavaObject("java.util.ArrayList")

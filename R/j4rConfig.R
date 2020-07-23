@@ -14,17 +14,24 @@
 cacheEnv <- new.env()
 
 #'
-#' Length of the buffer when reading from the socket connection.
+#' The settings environment for this package
 #'
-#' The buffer has a length of 100Kb by default.
+#' This environment contains the general settings of the package.
 #'
 #' @export
-bufferLength <- 100000
+settingEnv <- new.env()
+
+#'
+#' Length of the buffer when reading from the socket connection.
+#'
+#' The buffer has a length of 16Kb by default.
+#'
+#' @export
+bufferLength <- 16000
 
 MainSplitter <- "/;"
 SubSplitter <- "/,"
 ExceptionPrefix <- "j4r.net.server.JavaLocalGatewayServer$JavaGatewayException"
-
 
 
 #'
@@ -39,8 +46,10 @@ maxVectorLength <- 200
 .getJavaPath <- function() {
   javaPath <- Sys.getenv("JAVA")
   if (javaPath == "") {
-    message("It seems that the JAVA environment variable has not been set. J4R will rely on the OS path instead.")
-    message("You can consider defining this variable through the setJavaPath function.")
+    if (.isVerbose()) {
+      message("It seems that the JAVA environment variable has not been set. J4R will rely on the OS path instead.")
+      message("You can consider defining this variable through the setJavaPath function.")
+    }
     return("java")
   } else {
     return(javaPath)
@@ -120,15 +129,22 @@ getJavaVersion <- function() {
     output <- tryCatch(
       {
         javaPath <- suppressWarnings(.getJavaPath())
-        system2(javaPath, args = c("-version"), stdout = T, stderr = T, wait = F)
+        out <- list()
+        out$result <- system2(javaPath, args = c("-version"), stdout = T, stderr = T, wait = F)
+        out$correct <- T
+        out
       },
       error=function(cond) {
-        return(NULL)
+        out <- list()
+        out$result <- cond
+        out$correct <- F
+        return(out)
       }
     )
-    if (is.null(output)) {
-      stop("Java seems to be missing on this computer. Please check your configuration!")
+    if (output$correct == F) {
+      stop(output$result)
     } else {
+      output <- output$result
       javaVersion <- list()
       jv <- substring(output[1], first=regexpr("\"", output[1])[[1]] + 1)
       jv <- substring(jv, first=1, last = regexpr("\"", jv)[[1]] - 1)
@@ -178,7 +194,12 @@ getMemorySettings <- function() {
 }
 
 
-.onAttachLoad <- function(libname, pkgname) {
+.onLoad <- function(libname, pkgname) {
+  assign("delayDumpPileFlush", FALSE, envir = settingEnv)
+  assign("verbose", FALSE, envir = settingEnv)
+}
+
+.onAttach <- function(libname, pkgname) {
   .welcomeMessage()
 }
 
@@ -197,5 +218,48 @@ getMemorySettings <- function() {
 getJavaArchitecture <- function() {
   javaVersion <- getJavaVersion()
   return(javaVersion$architecture)
+}
+
+#'
+#' Set a default memory size for the Java Virtual Machine
+#'
+#' Allows to specify a default JVM size in Mb so that the option
+#' memorySize in hte connectToJava function does not need to be
+#' used.
+#'
+#' @param defaultJVMMemory the number of Mb for the JVM (must be equal to or greater than 50).
+#' If set to NULL, this option has no effect.
+#'
+#' @export
+j4r.config.setDefaultJVMMemorySize <- function(defaultJVMMemory) {
+  if (is.null(defaultJVMMemory)) {
+    if (exists("defaultJVMMemory", envir = settingEnv)) {
+      rm("defaultJVMMemory", envir = settingEnv)
+    }
+  } else {
+    if (defaultJVMMemory < 50) {
+      stop("The minimum default size for the JVM is 50 Mb")
+    }
+    assign("defaultJVMMemory", defaultJVMMemory, envir = settingEnv)
+  }
+}
+
+#'
+#' Enabling/disabling Verbose
+#'
+#' It enables or diasble the verbose in hte J4R package.
+#' By default, the verbose is disabled.
+#'
+#' @param verbose a logical
+#'
+#' @export
+j4r.config.setVerbose <- function(verbose) {
+  if (is.logical(verbose)) {
+    assign("verbose", verbose, envir = settingEnv)
+  }
+}
+
+.isVerbose <- function() {
+  return(get("verbose", envir = settingEnv))
 }
 

@@ -30,6 +30,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 import j4r.lang.J4RSystem;
@@ -44,24 +45,37 @@ import j4r.net.server.ServerConfiguration;
 public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 
 
-	private static final String EXTENSION = "-ext";
 	
 	private static final String FIRSTCALL = "-firstcall";
 	
-	private static final String PORT = "-port";
-	
-	private static final String MEMORY = "-mem";
-
 	public static final String MainSplitter = "/;";
 	
 	public static final String SubSplitter = "/,";
-
+	
+	
+//	private static final String R_NUMERIC_TOKEN = "numeric";
+//	private static final String R_INTEGER_TOKEN = "integer";
+//	private static final String R_LOGICAL_TOKEN = "logical";
+//	private static final String R_CHARACTER_TOKEN = "character";
+//	private static final String R_JAVA_OBJECT_TOKEN = "JavaObject";
+//	private static final String R_JAVA_LIST_TOKEN = "JavaList";
+	
+	private static final String R_NUMERIC_TOKEN = "nu";
+	private static final String R_INTEGER_TOKEN = "in";
+	private static final String R_LOGICAL_TOKEN = "lo";
+	private static final String R_CHARACTER_TOKEN = "ch";
+	private static final String R_JAVA_OBJECT_TOKEN = "JO";
+	private static final String R_JAVA_LIST_TOKEN = "JL";
+	
+	
 	private final static Map<String, Class<?>> PrimitiveTypeMap = new HashMap<String, Class<?>>();
 	static {
 		PrimitiveTypeMap.put("integer", int.class);
 		PrimitiveTypeMap.put("character", String.class);
 		PrimitiveTypeMap.put("numeric", double.class);
 		PrimitiveTypeMap.put("logical", boolean.class);
+		PrimitiveTypeMap.put("long", long.class);
+		PrimitiveTypeMap.put("float", float.class);
 	}
 
 	static class InternalShutDownHook extends Thread {
@@ -107,11 +121,11 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 		
 		@Override
 		public String toString() {
-			String output = "JavaList" + MainSplitter;
+			String output = R_JAVA_LIST_TOKEN + MainSplitter;
 			for (ParameterWrapper obj : this) {
 				String toBeAdded = obj.toString();
-				if (toBeAdded.startsWith("JavaObject" + MainSplitter)) {
-					toBeAdded = toBeAdded.substring(("JavaObject" + MainSplitter).length());
+				if (toBeAdded.startsWith(R_JAVA_OBJECT_TOKEN + MainSplitter)) {
+					toBeAdded = toBeAdded.substring((R_JAVA_OBJECT_TOKEN + MainSplitter).length());
 				}
 				output = output + toBeAdded + SubSplitter;	
 			}
@@ -161,13 +175,13 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 		public String toString() {
 			if (ReflectUtility.JavaWrapperToPrimitiveMap.containsKey(type)) {
 				if (type.equals(Double.class) || type.equals(Float.class)) {
-					return "numeric" + ((Number) value).toString();
+					return R_NUMERIC_TOKEN + ((Number) value).toString();
 				} else if (type.equals(Integer.class) || type.equals(Long.class)) {
-					return "integer" + ((Number) value).toString();
+					return R_INTEGER_TOKEN + ((Number) value).toString();
 				} else if (type.equals(Boolean.class)) {
-					return "logical" + ((Boolean) value).toString();
+					return R_LOGICAL_TOKEN + ((Boolean) value).toString();
 				} else {
-					return "character" + value.toString();
+					return R_CHARACTER_TOKEN + value.toString();
 				}
 			} else {
 				String className = type.getName();
@@ -176,7 +190,7 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 				} else if (className.endsWith(MainSplitter)) {
 					className = className.substring(0, className.length() - MainSplitter.length());
 				}
-				return "JavaObject" + MainSplitter + className + "@" + System.identityHashCode(value);
+				return R_JAVA_OBJECT_TOKEN + MainSplitter + className + "@" + System.identityHashCode(value);
 			}
 		}
 	}
@@ -191,21 +205,24 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 		}
 		
 	}
-
-	
 		
-	private static String ConstructCode = "create";
-	private static String ConstructNullCode = "createnull";
-	private static String ConstructArrayCode = "createarray";
-	private static String ConstructNullArrayCode = "createnullarray";
+	private static String ConstructCode = "co";
+	private static String ConstructNullArrayCode = "cona";
+	private static String ConstructNullCode = "conu";
+	private static String ConstructArrayCode = "coar";
 	private static String MethodCode = "method";
-	private static String SynchronizeEnvironment = "sync";
+//	private static String SynchronizeEnvironment = "sync";
+	private static String ClassInfo = "cli";
+	private static String FlushInstances = "flush";
+	private static String InternalMapSize = "size";
 	private static String FieldCode = "field";
 
+	private static final Random RANDOM = new Random();
 	
 
 	
 	public Object processCode(String request) throws Exception {
+//		return null;
 		String[] requestStrings = request.split(MainSplitter);
 		if (requestStrings[0].startsWith(ConstructCode)) {	// can be either create, createarray or createnull here
 			return createObjectFromRequestStrings(requestStrings); 
@@ -213,8 +230,14 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 			return processMethod(requestStrings);
 		} else if (requestStrings[0].equals(FieldCode)) {
 			return processField(requestStrings);
-		} else if (requestStrings[0].equals(SynchronizeEnvironment)) {
-			return synchronizeEnvironment(requestStrings);
+		} else if (requestStrings[0].equals(ClassInfo)) {
+			return getClassInfo(requestStrings);
+//		} else if (requestStrings[0].equals(SynchronizeEnvironment)) {
+//			return synchronizeEnvironment(requestStrings);
+		} else if (requestStrings[0].equals(FlushInstances)) {
+			return flushTheseObjects(requestStrings);
+		} else if (requestStrings[0].equals(InternalMapSize)) {
+			return getInternalMapSize();
 		} else {
 			try {
 				return BasicClient.ClientRequest.valueOf(request);
@@ -222,35 +245,95 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 				throw new InvalidParameterException("Request unknown! " + request);
 			}
 		}
-
 	}
 	
-	private Object synchronizeEnvironment(String[] requestStrings) {
-		Map<Integer, Object> actualMap = new HashMap<Integer, Object>();
-		for (int i = 1; i < requestStrings.length; i++) {
-			List<ParameterWrapper> wrappers = findObjectInEnvironment(requestStrings[i]);
-			if (wrappers != null) {
-				for (ParameterWrapper wrapper : wrappers) {
-					Object caller = wrapper.value;
-					actualMap.put(System.identityHashCode(caller), caller);
+
+	private Object getClassInfo(String[] requestStrings) throws ClassNotFoundException {
+		String classname = requestStrings[1];
+		Class clazz;
+		boolean isArray;
+		if (classname.startsWith("[")) {
+			clazz = Object.class;
+			isArray = true;
+		} else {
+			clazz = Class.forName(classname);
+			isArray = false;
+		}
+		Method[] methods = clazz.getMethods();
+		JavaObjectList outputList = new JavaObjectList();
+		for (Method m : methods) {
+			registerMethodOutput(m.getName(), outputList);
+		}
+		if (isArray) {
+			registerMethodOutput("clone", outputList); // clone is changed from protected to public when dealing with arrays
+		}
+		registerMethodOutput("endOfMethods", outputList);
+		Field[] fields = clazz.getFields();
+		for (Field f : fields) {
+			registerMethodOutput(f.getName(), outputList);
+		}
+		if (isArray) {
+			registerMethodOutput("length", outputList);
+		}
+		if (outputList.isEmpty()) {
+			return null;
+		} else if (outputList.size() == 1) {
+			return outputList.get(0);
+		} else {
+			return outputList;
+		}
+	}
+
+
+//	private Object synchronizeEnvironment(String[] requestStrings) {
+//		Map<Integer, Object> actualMap = new HashMap<Integer, Object>();
+//		for (int i = 1; i < requestStrings.length; i++) {
+//			List<ParameterWrapper> wrappers = findObjectInEnvironment(requestStrings[i]);
+//			if (wrappers != null) {
+//				for (ParameterWrapper wrapper : wrappers) {
+//					Object caller = wrapper.value;
+//					actualMap.put(System.identityHashCode(caller), caller);
+//				}
+//			}
+//		}
+//		Map<Integer, Object> toBeRemoved = new HashMap<Integer, Object>();
+//		for (Object value : values()) {
+//			if (!actualMap.containsKey(System.identityHashCode(value))) {
+//				toBeRemoved.put(System.identityHashCode(value), value);
+//			}
+//		}
+////		for (Object value : toBeRemoved.values()) {
+////			remove(System.identityHashCode(value), value);
+////		}
+////		JavaObjectList outputList = new JavaObjectList();
+////		registerMethodOutput(size(), outputList);
+////		return outputList;
+//		return innerFlush(toBeRemoved);
+//	}
+
+	private Object flushTheseObjects(String[] requestStrings) {
+		String prefix = "java.objecthashcode";
+		if (requestStrings[1].startsWith(prefix)) {
+			String[] newArgs = requestStrings[1].substring(prefix.length()).split(SubSplitter);
+//			int nbRemoved = 0;
+			for (int i = 0; i < newArgs.length; i++) {
+				int hashcodeForThisJavaObject = Integer.parseInt(newArgs[i]);
+				if (containsKey(hashcodeForThisJavaObject)) {
+					remove(hashcodeForThisJavaObject);
+//					nbRemoved++;
 				}
 			}
+//			System.out.println("Nb removed " + nbRemoved + "/" + newArgs.length);
 		}
-		Map<Integer, Object> toBeRemoved = new HashMap<Integer, Object>();
-		for (Object value : values()) {
-			if (!actualMap.containsKey(System.identityHashCode(value))) {
-				toBeRemoved.put(System.identityHashCode(value), value);
-			}
-		}
-		for (Object value : toBeRemoved.values()) {
-			remove(System.identityHashCode(value), value);
-		}
+		return null;
+	}
+
+	private JavaObjectList getInternalMapSize() {
 		JavaObjectList outputList = new JavaObjectList();
 		registerMethodOutput(size(), outputList);
 		return outputList;
 	}
-
-
+	
 	private List<ParameterWrapper> findObjectInEnvironment(String string) {
 		List<ParameterWrapper> wrappers = new ArrayList<ParameterWrapper>();
 		String prefix = "java.objecthashcode";
@@ -292,7 +375,8 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 			if (wrappers.size() == 1 && caller.type.equals(String.class)) { // could be a call to a static method
 				try {
 					String className = caller.value.toString();
-					clazz = ClassLoader.getSystemClassLoader().loadClass(className);
+//					clazz = ClassLoader.getSystemClassLoader().loadClass(className);
+					clazz = Class.forName(className);
 					lookingForStaticMethod = true;
 					wrappers = new ArrayList<ParameterWrapper>();
 					wrappers.add(new ParameterWrapper(clazz, null));
@@ -310,30 +394,38 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 		}
 		ParameterList parameters = (ParameterList) outputLists[1];
 		String fieldName = requestStrings[2];
-		Field field;
-		try {
-			field = clazz.getField(fieldName);
-		} catch (NoSuchFieldException e) {
-			if (clazz.equals(String.class)) {
-				throw new NoSuchFieldException(e.getMessage() + " - NOTE: the source was treated as a String object!");
-			} else {
-				throw e;
-			}
-		} 			
+		boolean isArrayLengthCalled = clazz.getName().startsWith("[") && parameters.isEmpty() && fieldName.equals("length");
+		Field field = null;
+		if (!isArrayLengthCalled) {
+			try {
+				field = clazz.getField(fieldName);
+			} catch (NoSuchFieldException e) {
+				if (clazz.equals(String.class)) {
+					throw new NoSuchFieldException(e.getMessage() + " - NOTE: the source was treated as a String object!");
+				} else {
+					throw e;
+				}
+			} 			
 
-		if (lookingForStaticMethod) {
-			if (!Modifier.isStatic(field.getModifiers())) {		// checks if the field is truly static or throws an exception otherwise
-				throw new InvalidParameterException("The field is not a static field!");
+			if (lookingForStaticMethod) {
+				if (!Modifier.isStatic(field.getModifiers())) {		// checks if the field is truly static or throws an exception otherwise
+					throw new InvalidParameterException("The field is not a static field!");
+				}
 			}
 		}
 		
 		JavaObjectList outputList = new JavaObjectList();
-		if (parameters.isEmpty()) {
+		if (parameters.isEmpty()) {		// that is a getField call
 			for (int j = 0; j < wrappers.size(); j++) {
-				Object result = field.get(wrappers.get(j).value);
+				Object result;
+				if (isArrayLengthCalled) {
+					result = Array.getLength(wrappers.get(j).value);
+				} else {
+				 	result = field.get(wrappers.get(j).value);
+				}
 				registerMethodOutput(result, outputList);
 			}
-		} else {
+		} else {						// that is a setField call
 			if (wrappers.size() > 1 && parameters.getInnerSize() > 1 && wrappers.size() != parameters.getInnerSize()) {
 				throw new InvalidParameterException("The length of the java.arraylist object is different of the length of the vectors in the parameters!");
 			} else {
@@ -361,6 +453,11 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 		}
 	}
 
+	private static int generateSecurityKey() {
+		return RANDOM.nextInt();
+	}
+	
+	
 	@SuppressWarnings({ "rawtypes", "unchecked" })
 	private Object processMethod(String[] requestStrings) throws Exception {
 		Class clazz = null;
@@ -376,7 +473,8 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 			if (wrappers.size() == 1 && caller.type.equals(String.class)) { // could be a call to a static method
 				try {
 					String className = caller.value.toString();
-					clazz = ClassLoader.getSystemClassLoader().loadClass(className);
+//					clazz = ClassLoader.getSystemClassLoader().loadClass(className);
+					clazz = Class.forName(className);
 					lookingForStaticMethod = true;
 					wrappers = new ArrayList<ParameterWrapper>();
 					wrappers.add(new ParameterWrapper(clazz, null));
@@ -479,7 +577,7 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 			}
 		}
 		if (possibleMatches.isEmpty()) {
-			throw new NoSuchMethodException("Method " + methodName + "cannot be found in the class " + clazz.getSimpleName());
+			throw new NoSuchMethodException("Method " + methodName + " cannot be found in the class " + clazz.getSimpleName());
 		} else {
 			Collections.sort(possibleMatches);
 		}
@@ -571,7 +669,8 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 		if (ReflectUtility.PrimitiveTypeMap.containsKey(className)) {
 			clazz = ReflectUtility.PrimitiveTypeMap.get(className);
 		} else {
-			clazz = ClassLoader.getSystemClassLoader().loadClass(className);
+//			clazz = ClassLoader.getSystemClassLoader().loadClass(className);
+			clazz = Class.forName(className);
 		}
 		
 		List[] outputLists = marshallParameters(requestStrings, 2);
@@ -682,11 +781,16 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 			} else if (primitiveTypeClass == "logical") {
 				String subString = value.toLowerCase();
 				wrappers.add(new ParameterWrapper(boolean.class, Boolean.valueOf(subString).booleanValue()));
+			} else if (primitiveTypeClass == "long") {
+				wrappers.add(new ParameterWrapper(long.class, Long.parseLong(value)));
+			} else if (primitiveTypeClass == "float") {
+				wrappers.add(new ParameterWrapper(float.class, Float.parseFloat(value)));
 			}
 		}
 		return wrappers;
 	}
 
+	
 	
 	/**
 	 * Main entry point for creating a REnvironment hosted by a Java local gateway server.
@@ -708,7 +812,7 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 				} else {
 					classPath = "j4r.jar";
 				}
-				String extensionPath = J4RSystem.retrieveArgument(EXTENSION, arguments);
+				String extensionPath = J4RSystem.retrieveArgument(JavaLocalGatewayServer.EXTENSION, arguments);
 				if (extensionPath != null) {
 					if (new File(extensionPath).exists()) {
 						String classPathSeparator = ":";
@@ -719,13 +823,32 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 					}
 				}
 				
-				String port = J4RSystem.retrieveArgument(PORT, arguments);
+				String port = J4RSystem.retrieveArgument(JavaLocalGatewayServer.PORT, arguments);
 				if (port != null) {
-					newCommands.add(PORT);
+					String[] p = port.split(JavaLocalGatewayServer.PortSplitter);
+					for (int i = 0; i < p.length; i++) {
+						if (Integer.parseInt(p[i]) < 0) {
+							throw new InvalidParameterException("Port numbers should be integers equal to or greater than 0!");
+						};
+					}
+					newCommands.add(JavaLocalGatewayServer.PORT);
 					newCommands.add(port);
+				} else {
+					String nbPorts = J4RSystem.retrieveArgument(JavaLocalGatewayServer.NB_PORTS, arguments);
+					if (nbPorts == null) { // make sure there is at least one port
+						newCommands.add(JavaLocalGatewayServer.NB_PORTS);
+						newCommands.add("1");
+					} else {
+						newCommands.add(JavaLocalGatewayServer.NB_PORTS);
+						newCommands.add(nbPorts);
+					}
 				}
-				
-				String memorySizeStr = J4RSystem.retrieveArgument(MEMORY, arguments);
+
+				String wd = J4RSystem.retrieveArgument(JavaLocalGatewayServer.WD, arguments);
+				newCommands.add(JavaLocalGatewayServer.WD);
+				newCommands.add(wd);
+
+				String memorySizeStr = J4RSystem.retrieveArgument(JavaLocalGatewayServer.MEMORY, arguments);
 				Integer memorySize = null;
 				if (memorySizeStr != null) {
 					try {
@@ -738,7 +861,7 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 				File jarFile = new File(REnvironment.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath());
 				File rootPath = jarFile.getParentFile();
 
-				JavaProcessWrapper rGatewayProcessWrapper = new JavaProcessWrapper("RGateway Server", newCommands, rootPath);
+				JavaProcessWrapper rGatewayProcessWrapper = new JavaProcessWrapper("Java server", newCommands, rootPath);
 				Runtime.getRuntime().addShutdownHook(new InternalShutDownHook(rGatewayProcessWrapper));
 				JavaProcess rGatewayProcess = rGatewayProcessWrapper.getInternalProcess();
 				rGatewayProcess.setClassPath(classPath);
@@ -751,20 +874,50 @@ public class REnvironment extends ConcurrentHashMap<Integer, Object> {
 				rGatewayProcessWrapper.run();
 				System.exit(0);
 			}
-			String portStr = J4RSystem.retrieveArgument(PORT, arguments);
-			int port;
+			String portStr = J4RSystem.retrieveArgument(JavaLocalGatewayServer.PORT, arguments);
+			int[] listeningPorts;
 			if (portStr != null) {
-				port = Integer.parseInt(portStr);
+				listeningPorts = parsePorts(portStr);
 			} else {
-				port = 18011;		// default port
+				String nbPortsStr = J4RSystem.retrieveArgument(JavaLocalGatewayServer.NB_PORTS, arguments);
+				int nbPorts;
+				if (nbPortsStr == null) {
+					nbPorts = 1;
+				} else {
+					nbPorts = Integer.parseInt(nbPortsStr);
+				}
+				listeningPorts = new int[nbPorts];
 			}
-			server = new JavaLocalGatewayServer(new ServerConfiguration(port), new REnvironment());
+			String backdoorportStr = J4RSystem.retrieveArgument(JavaLocalGatewayServer.BACKDOORPORT, arguments);
+			int[] backdoorports;
+			if (backdoorportStr != null) {
+				backdoorports = parsePorts(backdoorportStr);
+			} else {
+				backdoorports = new int[2];
+			}
+			String debugMode = J4RSystem.retrieveArgument(JavaLocalGatewayServer.DEBUG, arguments);
+			int key;
+			if (debugMode != null && debugMode.trim().toLowerCase().equals("on")) {
+				key = 1000000;
+			} else {
+				key = generateSecurityKey();
+			}
+			ServerConfiguration conf = new ServerConfiguration(listeningPorts, backdoorports, key, J4RSystem.retrieveArgument(JavaLocalGatewayServer.WD, arguments));
+			server = new JavaLocalGatewayServer(conf, new REnvironment());
 			server.startApplication();
 		} catch (Exception e) {
+			System.err.println("Error:" + e.getMessage());
 			System.exit(1);
 		}
 	}
 	
-	
+	private static int[] parsePorts(String str) {
+		String[] p = str.split(JavaLocalGatewayServer.PortSplitter);
+		int[] ports = new int[p.length];
+		for (int i = 0; i < p.length; i++) {
+			ports[i] = Integer.parseInt(p[i]);
+		}
+		return ports;
+	}
 	
 }

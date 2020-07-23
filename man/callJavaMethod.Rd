@@ -4,7 +4,7 @@
 \alias{callJavaMethod}
 \title{Call a Java method}
 \usage{
-callJavaMethod(source, methodName, ...)
+callJavaMethod(source, methodName, ..., affinity = 1)
 }
 \arguments{
 \item{source}{this should be either a java.list instance or a single java.object instance for non-static methods or
@@ -13,6 +13,8 @@ a string representing the Java class name in case of static method}
 \item{methodName}{the name of the method}
 
 \item{...}{the parameters of the method}
+
+\item{affinity}{a parameter used by the mclapply.j4r function in case of multithreading.}
 }
 \value{
 It depends on the method. It can return a primitive type (or a vector of primitive), a Java instance (or a list of Java instances) or nothing at all.
@@ -24,17 +26,23 @@ instances can be returned.
 }
 \details{
 There is no need to cast a particular parameter to a super class. Actually, the Java server tries to find the method
-that best matches the types of the parameters
+that best matches the types of the parameters. Primitive type are converted on the fly, numeric to double, integer to int,
+logical to boolean and character to String. Factors are also converted to String.
+
+When the source is a java.object instance, this function can be substituted for the $ operator.
 }
 \examples{
 ### starting Java
-connectToJava()
+connectToJava(memorySize = 200)
 
 ### creating an empty ArrayList object
 myList <- createJavaObject("java.util.ArrayList")
 
 ### adding 3 to the list
 callJavaMethod(myList, "add", 3)
+
+### adding 5 to the list
+myList$add(3)
 
 ### shutting down Java
 shutdownJava()

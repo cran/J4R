@@ -10,6 +10,8 @@ context("Test on dynamic classpath")
 
 library(J4R)
 
+j4r.config.setDefaultJVMMemorySize(200)
+
 if (!isConnectedToJava()) {
   connectToJava()
 }
@@ -26,8 +28,9 @@ test_that("Check the return value of checkIfClasspathContains", {
   expect_equal(checkIfClasspathContains("repicea.jar"), FALSE)
 })
 
-urlString <- paste(getwd(),"/javatests/repicea.jar", sep="")
-addUrlToClassPath(urlString)
+# urlString <- file.path(getwd(),"tests", "testthat", "javatests", "repicea.jar")
+urlString <- file.path(getwd(),"javatests", "repicea.jar")
+suppressWarnings(addUrlToClassPath(urlString))
 
 test_that("Check the return value of checkIfClasspathContains", {
   expect_equal(checkIfClasspathContains(expectedJar), TRUE)
@@ -41,4 +44,4 @@ test_that("Check if the Matrix object has been created", {
   expect_equal("java.object" %in% class(myMatrix), TRUE)
 })
 
-
+shutdownJava()

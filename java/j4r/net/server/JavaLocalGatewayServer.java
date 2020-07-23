@@ -18,15 +18,14 @@
  */
 package j4r.net.server;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.util.concurrent.ConcurrentHashMap;
 
 import j4r.lang.codetranslator.REnvironment;
-import j4r.net.SocketWrapper;
-import j4r.net.TCPSocketWrapper;
 import j4r.net.server.BasicClient.ClientRequest;
 
 /**
@@ -37,58 +36,15 @@ import j4r.net.server.BasicClient.ClientRequest;
 public class JavaLocalGatewayServer extends AbstractServer {
 	
 	
-	class REpiceaBackDoorCancellationThread extends Thread {
-		
-		private final ServerSocket emergencySocket;
-		private final int port;
-		
-		REpiceaBackDoorCancellationThread(int port) throws IOException {
-			super("Back door cancellation thread");
-			this.port = port;
-			emergencySocket = new ServerSocket(port);
-			start();
-		}
-		
-		@Override
-		public void run() {
-			while (true) {
-				SocketWrapper clientSocket = null;
-				try {
-					clientSocket = new TCPSocketWrapper(emergencySocket.accept(), false);
-					clientSocket.writeObject(ServerReply.CallAccepted);
-					Object request = clientSocket.readObject();
-					if (request.toString().equals("emergencyShutdown")) {
-						System.exit(1);
-					} else if (request.toString().equals("softExit")) {
-						emergencySocket.close();
-						break;
-					}
-				} catch (IOException e1) {
-					e1.printStackTrace();
-				} catch (Exception e2) {
-					e2.printStackTrace();
-				} finally {
-					try {
-						if (clientSocket != null  && !clientSocket.isClosed()) {
-							clientSocket.close();
-						}
-					} catch (IOException e) {
-						e.printStackTrace();
-					}
-				}
-			}
-		}
+	public static final String EXTENSION = "-ext";
+	public static final String PORT = "-ports"; 
+	public static final String BACKDOORPORT = "-backdoorport";
+	public static final String NB_PORTS = "-nbports";
+	public static final String WD = "-wd";
+	public static final String MEMORY = "-mem";
+	public static final String PortSplitter = ":";
+	public static final String DEBUG = "-debug";
 
-		protected void softExit() {
-			try {
-				Socket socket = new Socket(InetAddress.getLoopbackAddress(), port);
-				SocketWrapper socketWrapper = new TCPSocketWrapper(socket, false);
-				socketWrapper.readObject();
-				socketWrapper.writeObject("softExit");
-				socketWrapper.close();
-			} catch (Exception e) {}
-		}
-	}
 	
 	/**
 	 * A wrapper for Exception.
@@ -109,10 +65,13 @@ public class JavaLocalGatewayServer extends AbstractServer {
 		}
 	}
 	
+
 	private class JavaGatewayClientThread extends ClientThread {
 
-		protected JavaGatewayClientThread(AbstractServer caller, int workerID) {
-			super(caller, workerID);
+		REnvironment translator;
+		
+		protected JavaGatewayClientThread(AbstractServer.CallReceiverThread receiver, int workerID) {
+			super(receiver, workerID);
 		}
 
 		@Override
@@ -120,25 +79,33 @@ public class JavaLocalGatewayServer extends AbstractServer {
 			while(true) {
 				try {
 					firePropertyChange("status", null, "Waiting");
-					socketWrapper = caller.getWaitingClients();
+					socketWrapper = receiver.clientQueue.take();
 					InetAddress clientAddress = socketWrapper.getInetAddress();
-					firePropertyChange("status", null, "Connected to client: " + clientAddress.getHostAddress());		// for TCP the client is known for UDP we are not connected yet TODO: find a way to lock the UDP socket until the connection is set
-					
+					this.translator = registerClient(clientAddress);
+					JavaLocalGatewayServer.this.whoIsWorkingForWho.put(this, clientAddress);
+					firePropertyChange("status", null, "Connected to client: " + clientAddress.getHostAddress());		
 					while (!socketWrapper.isClosed()) {
 						try {
 							Object somethingInParticular = processRequest();
 							if (somethingInParticular != null) {
+								if (Thread.interrupted()) {
+									throw new InterruptedException();
+								}
 								if (somethingInParticular.equals(BasicClient.ClientRequest.closeConnection) 
 										|| somethingInParticular.equals(BasicClient.ClientRequest.closeConnection.name())) {
 									socketWrapper.writeObject(ServerReply.ClosingConnection);
 									closeSocket();
-									caller.requestShutdown();
+									JavaLocalGatewayServer.this.whoIsWorkingForWho.remove(this);
+									if (!JavaLocalGatewayServer.this.whoIsWorkingForWho.contains(clientAddress)) {
+										JavaLocalGatewayServer.this.translators.remove(clientAddress);
+									}
+									JavaLocalGatewayServer.this.requestShutdown();
 									break;
 								} else {
 									socketWrapper.writeObject(somethingInParticular);
 								}
 							} else {
-								socketWrapper.writeObject(ServerReply.RequestReceivedAndProcessed);
+								socketWrapper.writeObject(ServerReply.Done);
 							}
 						} catch (Exception e) {		// something wrong happened during the processing of the request
 							try {
@@ -155,7 +122,7 @@ public class JavaLocalGatewayServer extends AbstractServer {
 						}
 					}
 					if (JavaLocalGatewayServer.this.shutdownOnClosedConnection) {
-						caller.requestShutdown();
+						JavaLocalGatewayServer.this.requestShutdown();
 						break;
 					}
 				} catch (InterruptedException e) {
@@ -164,29 +131,32 @@ public class JavaLocalGatewayServer extends AbstractServer {
 			}
 		}
 
+
 		@Override
 		protected Object processRequest() throws Exception {
 			Object crudeRequest = getSocket().readObject();
-			if (crudeRequest instanceof ClientRequest) {
-				return crudeRequest;
-			} else if (crudeRequest instanceof String) {
+			if (crudeRequest instanceof String) {
 				String request = (String) crudeRequest;
-				if (request.startsWith("time")) {
-					long startMillisec = Long.parseLong(request.substring(4));
-					long finalTime = System.currentTimeMillis();
-					double elapsedTime =  (finalTime - startMillisec);
-					System.out.println("Elapsed time single received packet:" + elapsedTime);
+				if (ClientRequest.closeConnection.name().equals(request.trim())) {
+					return ClientRequest.closeConnection;
+				} else {
+					if (request.startsWith("time")) {
+						long startMillisec = Long.parseLong(request.substring(4));
+						long finalTime = System.currentTimeMillis();
+						double elapsedTime =  (finalTime - startMillisec);
+						System.out.println("Elapsed time single received packet:" + elapsedTime);
+					}
+					return this.translator.processCode(request);
 				}
-				return JavaLocalGatewayServer.this.translator.processCode(request);
+			} else {
+				return null;
 			}
-			return null;
 		}
 
 	}
 
-	protected final REnvironment translator;	
+	protected final ConcurrentHashMap<InetAddress, REnvironment> translators;	
 	protected final boolean shutdownOnClosedConnection;
-	protected final REpiceaBackDoorCancellationThread backdoorThread;
 	protected boolean bypassShutdownForTesting;
 	
 	/**
@@ -199,17 +169,18 @@ public class JavaLocalGatewayServer extends AbstractServer {
 		this(servConf, translator, true); // true: the server shuts down when the connection is lost
 	}
 
-	/**
-	 * This method waits until the head of the queue is non null and returns the socket.
-	 * @return a Socket instance
-	 * @throws InterruptedException 
-	 */
-	@Override
-	protected synchronized SocketWrapper getWaitingClients() throws InterruptedException {
-		SocketWrapper socket = clientQueue.take();
-		return socket;
+
+	synchronized REnvironment registerClient(InetAddress clientAddress) {
+		if (!translators.containsKey(clientAddress)) {
+			translators.put(clientAddress, new REnvironment());
+		}
+		return(translators.get(clientAddress));
 	}
 
+
+	
+	
+	
 	/**
 	 * Hidden constructor for test purpose
 	 * @param servConf a ServerConfiguration instance
@@ -218,19 +189,16 @@ public class JavaLocalGatewayServer extends AbstractServer {
 	 * @throws Exception
 	 */
 	protected JavaLocalGatewayServer(ServerConfiguration servConf, REnvironment translator, boolean shutdownOnClosedConnection) throws Exception {
-//		super(new ServerConfiguration(1, 0, outerPort, null), false); // false: the client is not a Java application
 		super(servConf, false);
-		this.translator = translator;
+		this.translators = new ConcurrentHashMap<InetAddress, REnvironment>();
 		this.shutdownOnClosedConnection = shutdownOnClosedConnection;
-		backdoorThread = new REpiceaBackDoorCancellationThread(50000);
 	}
 
 	@Override
-	protected ClientThread createClientThread(AbstractServer server, int id) {
-		return new JavaGatewayClientThread(server, id);
+	protected ClientThread createClientThread(AbstractServer.CallReceiverThread receiver, int id) {
+		return new JavaGatewayClientThread(receiver, id);
 	}
 
-	
 	
 	@Override
 	protected void shutdown(int shutdownCode) {
@@ -241,6 +209,25 @@ public class JavaLocalGatewayServer extends AbstractServer {
 			return;
 		}
 		super.shutdown(shutdownCode);
+	}
+
+	@Override
+	protected void createFileInfoForLocalServer() throws IOException {
+		String filename = getConfiguration().wd.trim() + File.separator + "J4RTmpFile";
+		File file = new File(filename);
+		String realizedListeningPorts = "";
+		for (CallReceiverThread t : callReceiverThreads) {
+			if (!realizedListeningPorts.isEmpty()) {
+				realizedListeningPorts += PortSplitter;
+			}
+			realizedListeningPorts += t.serverSocket.getLocalPort();
+		}
+		String outputStr = "" + getConfiguration().key + ";" + 
+				backdoorThread.emergencySocket.getLocalPort() + PortSplitter + gcReceiverThread.serverSocket.getLocalPort() + ";" + 
+				realizedListeningPorts; 
+		FileWriter writer = new FileWriter(file);
+		writer.write(outputStr);
+		writer.close();
 	}
 	
 	

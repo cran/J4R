@@ -21,10 +21,13 @@ package j4r.net.server;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -39,29 +42,102 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 	protected static enum ServerReply {IAmBusyCallBackLater, 
 		CallAccepted, 
 		ClosingConnection,
-		RequestReceivedAndProcessed}
+		Done,
+		SecurityChecked,
+		SecurityFailed}
+
+	
+	/**
+	 * The BackDoorThread class processes the request one by one and close the socket after
+	 * each one of them leaving the ServerSocket free to accept other calls. 
+	 */
+	class BackDoorThread extends Thread {
+		
+		final ServerSocket emergencySocket;
+		final int port;
+		
+		BackDoorThread(int port) throws IOException {
+			super("Back door thread");
+			setDaemon(true);
+			this.port = port;
+			emergencySocket = new ServerSocket(port);
+			start();
+		}
+		
+		@Override
+		public void run() {
+			while (true) {
+				SocketWrapper clientSocket = null;
+				try {
+					clientSocket = new TCPSocketWrapper(emergencySocket.accept(), false);
+					clientSocket.writeObject(ServerReply.CallAccepted);
+					if (AbstractServer.this.checkSecurity(clientSocket)) {
+						Object request = clientSocket.readObject();
+						if (request.toString().equals("emergencyShutdown")) {
+							System.exit(1);
+						} else if (request.toString().equals("softExit")) {
+							emergencySocket.close();
+							break;
+						} else if (request.toString().equals("interrupt")) {
+							InetAddress clientAddress = clientSocket.getInetAddress();
+							for (ClientThread t : AbstractServer.this.whoIsWorkingForWho.keySet()) {
+								InetAddress clientOfThisTread = AbstractServer.this.whoIsWorkingForWho.get(t);
+								if (clientOfThisTread.equals(clientAddress)) {
+									t.interrupt();
+								}
+							}
+						}
+					}
+				} catch (IOException e1) {
+					e1.printStackTrace();
+				} catch (Exception e2) {
+					e2.printStackTrace();
+				} finally {
+					try {
+						if (clientSocket != null  && !clientSocket.isClosed()) {
+							clientSocket.close();
+						}
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
+			}
+		}
+
+		protected void softExit() {
+			try {
+				Socket socket = new Socket(InetAddress.getLoopbackAddress(), port);
+				SocketWrapper socketWrapper = new TCPSocketWrapper(socket, false);
+				socketWrapper.readObject();
+				socketWrapper.writeObject("softExit");
+				socketWrapper.close();
+			} catch (Exception e) {}
+		}
+	}
 
 	/**
 	 * This internal class handles the calls and stores these in the queue.
 	 * @author Mathieu Fortin
 	 */
-	private class CallReceiverThread extends Thread {
+	class CallReceiverThread extends Thread {
 
 		private boolean shutdownCall;
-		protected final ServerSocket serverSocket;
-		private final LinkedBlockingQueue<SocketWrapper> clientQueue;
-
+		final ServerSocket serverSocket;
+		final LinkedBlockingQueue<SocketWrapper> clientQueue;
+		final int id;
+		
 		/**
 		 * General constructor. 
 		 * @param serverSocket a ServerSocket instance if null then the protocol is assumed to be UDP with a single client
 		 * @param clientQueue
 		 * @param maxNumberOfWaitingClients
 		 */
-		private CallReceiverThread(ServerSocket serverSocket, LinkedBlockingQueue<SocketWrapper> clientQueue, int maxNumberOfWaitingClients) {
-			shutdownCall = false;
+		private CallReceiverThread(ServerSocket serverSocket, int id) {
 			this.serverSocket = serverSocket;
-			this.clientQueue = clientQueue;
-			setName("Answering calls thread");
+			this.id = id;
+			clientQueue = new LinkedBlockingQueue<SocketWrapper>();
+			shutdownCall = false;
+			setName("Answering call thread " + this.id);
 		}
 		
 		/*
@@ -73,7 +149,9 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 				while (!shutdownCall) {
 					SocketWrapper clientSocket = new TCPSocketWrapper(serverSocket.accept(), AbstractServer.this.isCallerAJavaApplication);
 					clientSocket.writeObject(ServerReply.CallAccepted);
-					clientQueue.add(clientSocket);
+					if (AbstractServer.this.checkSecurity(clientSocket)) {
+						clientQueue.add(clientSocket);
+					}
 				}
 				System.out.println("Call receiver thread shut down");
 			} catch (Exception e) {
@@ -90,14 +168,17 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 				}
 			}
 		}
-
 	}
 
 
-	private ArrayList<ClientThread> clientThreads;
-	protected final LinkedBlockingQueue<SocketWrapper> clientQueue;
-	private CallReceiverThread callReceiver;
+	private final ArrayList<ClientThread> clientThreads;
+	private final ArrayList<ClientThread> gcThreads;
 	
+	protected final List<CallReceiverThread> callReceiverThreads;
+	protected final CallReceiverThread gcReceiverThread;
+	protected final ConcurrentHashMap<ClientThread, InetAddress> whoIsWorkingForWho;
+	protected final BackDoorThread backdoorThread;
+
 	protected final boolean isCallerAJavaApplication;
 	
 	private final ServerConfiguration configuration;
@@ -114,12 +195,30 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 		this.configuration = configuration;
 		this.isCallerAJavaApplication = isCallerAJavaApplication;
 		clientThreads = new ArrayList<ClientThread>();
-		clientQueue = new LinkedBlockingQueue<SocketWrapper>();
+		gcThreads = new ArrayList<ClientThread>();
+		this.whoIsWorkingForWho = new ConcurrentHashMap<ClientThread, InetAddress>();
+//		clientQueue = new LinkedBlockingQueue<SocketWrapper>();
+		callReceiverThreads = new ArrayList<CallReceiverThread>();
 		try {
-			callReceiver = new CallReceiverThread(new ServerSocket(configuration.outerPort), clientQueue, configuration.maxSizeOfWaitingList);
-			for (int i = 0; i < configuration.numberOfClientThreads; i++) {
-				clientThreads.add(createClientThread(this, i + 1));		// i + 1 serves as id
+			List<ServerSocket> serverSockets = configuration.createServerSockets();
+			int i = 1;
+			for (ServerSocket ss : serverSockets) {
+				CallReceiverThread crt = new CallReceiverThread(ss, i);
+				callReceiverThreads.add(crt);
+				for (int j = 1; j <= configuration.numberOfClientThreadsPerReceiver; j++) {
+					clientThreads.add(createClientThread(crt, i * 1000 + j));		// i + 1 serves as id
+				}
+				i++;
 			}
+			
+			backdoorThread = new BackDoorThread(configuration.internalPorts[0]);
+
+			ServerSocket gcServerSocket = new ServerSocket(configuration.internalPorts[1]);
+			gcReceiverThread = new CallReceiverThread(gcServerSocket, 99);
+			for (int j = 1; j <= configuration.numberOfClientThreadsPerReceiver; j++) {
+				gcThreads.add(createClientThread(gcReceiverThread, 99 * 1000 + j));		// i + 1 serves as id
+			}
+
 		} catch (IOException e) {
 			e.printStackTrace();
 			throw new Exception("Unable to initialize the server");
@@ -128,25 +227,54 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 	}
 
 	
-	protected abstract ClientThread createClientThread(AbstractServer server, int id);
+	protected boolean checkSecurity(SocketWrapper clientSocket) {
+		if (configuration.isLocal) {
+			try {
+				Object obj = clientSocket.readObject();
+				int key = Integer.parseInt(obj.toString());
+				if (configuration.key == key) {
+					clientSocket.writeObject(ServerReply.SecurityChecked);
+					return true;
+				} else {
+					clientSocket.writeObject(ServerReply.SecurityFailed);
+					return false;
+				}
+			} catch (Exception e) {
+				try {
+					clientSocket.writeObject(e);
+				} catch (IOException e1) {
+					e1.printStackTrace();
+				}
+				return false;
+			}
+		} else {
+			return true;	// for web server 
+		}
+	}
+
+
+	protected abstract ClientThread createClientThread(CallReceiverThread receiverThread, int id);
 		
 
-	/**
-	 * This method waits until the head of the queue is non null and returns the socket.
-	 * @return a Socket instance
-	 * @throws InterruptedException 
-	 */
-	protected synchronized SocketWrapper getWaitingClients() throws InterruptedException {
-		SocketWrapper socket = clientQueue.take();
-		return socket;
-	}
+//	/**
+//	 * This method waits until the head of the queue is non null and returns the socket.
+//	 * @return a Socket instance
+//	 * @throws InterruptedException 
+//	 */
+//	protected synchronized SocketWrapper getWaitingClients() throws InterruptedException {
+//		SocketWrapper socket = clientQueue.take();
+//		return socket;
+//	}
 
 	/**
 	 * This method starts the worker thread, which listens to the clients in the queue.
 	 */
 	protected void listenToClients() {	
-		for (ClientThread thread : clientThreads) {
-			thread.start();
+		for (ClientThread t : clientThreads) {
+			t.start();
+		}
+		for (ClientThread t : gcThreads) {
+			t.start();
 		}
 	}
 
@@ -156,9 +284,12 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 	 * @throws InterruptedException
 	 */
 	protected void startReceiverThread() throws ExecutionException, InterruptedException {
-		System.out.println("Server starting");
-		callReceiver.start();
 		listenToClients();
+		for (CallReceiverThread t : callReceiverThreads) {
+			t.start();
+		}
+		gcReceiverThread.start();
+		System.out.println("Server started");
 //		callReceiver.join();
 //		System.out.println("Server shutting down");
 	}
@@ -191,6 +322,9 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 	@Override
 	protected void firstTasksToDo() {
 		addTask(new ServerTask(ServerTaskID.StartReceiverThread, this));
+		if (configuration.isLocalServer()) {
+			addTask(new ServerTask(ServerTaskID.CreateFileInfo, this));
+		}
 	}
 
 	public void addPropertyChangeListener(PropertyChangeListener listener) {
@@ -224,26 +358,32 @@ public abstract class AbstractServer extends AbstractGenericEngine implements Pr
 
 	@Override
 	public void requestShutdown() {
-		callReceiver.shutdownCall = true;
-		callReceiver.clientQueue.clear();
-		try {
-			if (callReceiver.serverSocket != null) {
-				callReceiver.serverSocket.close();
-			}
-		} catch (IOException e) {
-			callReceiver.interrupt();
-		} finally {
+		for (CallReceiverThread t : callReceiverThreads) {
+			t.shutdownCall = true;
+			t.clientQueue.clear();
 			try {
-				callReceiver.join(5000);
-			} catch (Exception e) {
-				e.printStackTrace();
+				if (t.serverSocket != null) {
+					t.serverSocket.close();
+				}
+			} catch (IOException e) {
+				t.interrupt();
+			} finally {
+				try {
+					t.join(5000);
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
 			}
 		}
 		super.requestShutdown();
 	}
+
+
+	/*
+	 * This method can be overriden and left empty for webserver.
+	 * @throws IOException
+	 */
+	protected abstract void createFileInfoForLocalServer() throws IOException;
 	
-
-
-
 
 }

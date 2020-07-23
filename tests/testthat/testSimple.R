@@ -1,5 +1,5 @@
 ########################################################
-# Home made tests for J4R
+# Simple tests for J4R
 # Author: Mathieu Fortin, Canadian Wood Fibre Centre
 # Date: January 2019
 ########################################################
@@ -9,6 +9,8 @@ context("Simple tests in J4R")
 #### Starting the Java server and connecting to it ####
 
 library(J4R)
+
+j4r.config.setDefaultJVMMemorySize(200)
 
 if (!isConnectedToJava()) {
   connectToJava()
@@ -22,7 +24,8 @@ mySimpleJavaObject <- createJavaObject("java.util.ArrayList")
 mySimpleJavaObject
 
 test_that("Returned object is of class java.object", {
-  expect_equal(class(mySimpleJavaObject)[length(class(mySimpleJavaObject))], "java.object")
+  expect_equal(methods::is(mySimpleJavaObject, "java.object"), TRUE)
+  expect_equal(length(mySimpleJavaObject), 1)
 })
 
 #### Creating a single object with a parameterized constructor ####
@@ -33,7 +36,7 @@ mySimpleJavaObject <- createJavaObject("java.util.ArrayList", as.integer(3))
 mySimpleJavaObject
 
 test_that("Returned object is of class java.object", {
-  expect_equal(class(mySimpleJavaObject)[length(class(mySimpleJavaObject))], "java.object")
+  expect_equal(methods::is(mySimpleJavaObject, "java.object"), TRUE)
 })
 
 #### Creating many objects with a parameterized constructor ####
@@ -44,18 +47,23 @@ myArrayLists <- createJavaObject("java.util.ArrayList", 3:5)
 myArrayLists
 
 test_that("myArrayLists object has three java.object instances", {
-  expect_equal(class(myArrayLists)[length(class(myArrayLists))], "java.list")
+  expect_equal(methods::is(myArrayLists, "java.list"), TRUE)
   expect_equal(length(myArrayLists), 3)
-  expect_equal(class(myArrayLists[[1]])[length(class(myArrayLists[[1]]))], "java.object")
-  expect_equal(class(myArrayLists[[2]])[length(class(myArrayLists[[2]]))], "java.object")
-  expect_equal(class(myArrayLists[[3]])[length(class(myArrayLists[[3]]))], "java.object")
+  expect_equal(methods::is(myArrayLists[[1]], "java.object"), TRUE)
+  expect_equal(methods::is(myArrayLists[[2]], "java.object"), TRUE)
+  expect_equal(methods::is(myArrayLists[[3]], "java.object"), TRUE)
 })
+
+# myListOfJavaReferences <- getListOfJavaReferences()
+# test_that("There are two java references in the environment", {
+#   expect_equal(length(myListOfJavaReferences), 2)
+# })
 
 #### Calling a method on a Java object ####
 
 # In this example, the value of 15 is added to the ArrayList instance that was previously created. The method add returns a boolean. Then we call the method .get(0) on the same object. The value of 15 is then returned to R.
 
-callJavaMethod(mySimpleJavaObject, "add", as.integer(15))
+callJavaMethod(mySimpleJavaObject, "add", 15)
 
 test_that("Adding 15 to mySimpleJavaObject instance", {
   expect_equal(callJavaMethod(mySimpleJavaObject, "get", as.integer(0)), 15)
@@ -93,31 +101,6 @@ test_that("Adding 15, 16 and 17 to the first, second and third instances of Arra
   expect_equal(callJavaMethod(myArrayLists, "get", as.integer(0)), c(15,16,17))
 })
 
-#### Calling the garbage collector ####
-
-myArrayLists[[2]] <- NULL
-
-nbObjects <- callJavaGC(environment())
-
-test_that("Removing one object from the java.list object and synchronizing yield 3 objects registered in the Java environment", {
-  expect_equal(nbObjects, 3)
-})
-
-rm("myArrayLists")
-
-nbObjects <- callJavaGC(environment())
-
-test_that("Removing the java.list object and synchronizing yield a single object left in the Java environment", {
-  expect_equal(nbObjects, 1)
-})
-
-rm(list = ls(envir = environment()))
-
-nbObjects <- callJavaGC(environment())
-
-test_that("Removing all the java.list object and synchronizing yield no object left in the Java environment", {
-  expect_equal(nbObjects, 0)
-})
 
 #### Instantiating an Enum variable ####
 
@@ -157,36 +140,9 @@ result <- createJavaObject("java.util.ArrayList", isNullObject = TRUE)
 result
 
 test_that("Create a NullWrapper instance", {
-  expect_equal(result$class, "j4r.lang.codetranslator.REnvironment$NullWrapper")
+  expect_equal(result$.class, "j4r.lang.codetranslator.REnvironment$NullWrapper")
 })
 
-#### Creating a 3x3 array of integers
-myArray <- createJavaObject("int", 3, 3, isArray = TRUE)
-
-test_that("Check the class of the array", {
-  expect_equal(myArray$class, "[[I")
-  expect_equal(getArrayLength(myArray), 3)
-  expect_equal(getArrayLength(getValueFromArray(myArray,0)), 3)
-})
-
-#### Creating two arrays of length 3 ####
-
-myArrays <- createJavaObject("int", c(3,3), isArray = TRUE)
-test_that("Check the class of the first and the second array", {
-  expect_equal(myArrays[[1]]$class, "[I")
-  expect_equal(myArrays[[2]]$class, "[I")
-  expect_equal(getArrayLength(myArrays[[1]]), 3)
-  expect_equal(getArrayLength(myArrays[[2]]), 3)
-})
-
-for (i in 0:2) {
-  setValueInArray(myArrays[[1]], i, i)
-}
-test_that("Check values in the array", {
-  expect_equal(getValueFromArray(myArrays[[1]], 0), 0)
-  expect_equal(getValueFromArray(myArrays[[1]], 1), 1)
-  expect_equal(getValueFromArray(myArrays[[1]], 2), 2)
-})
 
 
 #### Check if libraries are part of the path ####
@@ -208,7 +164,7 @@ output <- getAllValuesFromListObject(myNewList)
 
 test_that("Check if the getAllValuesFromListObject returns a list even if the original list contains a single object", {
   expect_equal(length(output), 1)
-  expect_equal(output[[1]]$class, "java.util.HashMap")
+  expect_equal(output[[1]]$.class, "java.util.HashMap")
 })
 
 
@@ -217,24 +173,6 @@ callJavaMethod(myNewList, "add", 5)
 output <- getAllValuesFromListObject(myNewList)
 
 test_that("Check if the getAllValuesFromListObject returns a numeric even if the original list contains a single object", {
-  expect_equal(length(output), 1)
-  expect_equal(output[[1]], 5)
-})
-
-myArray <- createJavaObject("java.util.HashMap", 1, isArray = TRUE)
-setValueInArray(myArray, createJavaObject("java.util.HashMap"),0)
-output <- getAllValuesFromArray(myArray)
-
-test_that("Check if the getAllValuesFromArray returns a list even if the original array contains a single object", {
-  expect_equal(length(output), 1)
-  expect_equal(output[[1]]$class, "java.util.HashMap")
-})
-
-myArray <- createJavaObject("int", 1, isArray = TRUE)
-setValueInArray(myArray, as.integer(5), 0)
-output <- getAllValuesFromArray(myArray)
-
-test_that("Check if the getAllValuesFromArray returns a numeric even if the original list contains a single object", {
   expect_equal(length(output), 1)
   expect_equal(output[[1]], 5)
 })
@@ -292,17 +230,13 @@ test_that("Adding 1 to 601 to the 601 ArrayList instances", {
 })
 
 
-#### Creating a null array ####
-
-myNullDoubleArray <- createJavaObject("double", 3, 3, isArray=T, isNullObject = T)
-test_that("Testing if the array has been produced", {
-  expect_equal(myNullDoubleArray$class, "j4r.lang.codetranslator.REnvironment$NullWrapper")
-})
 
 #### Testing if a null array is still considered when invoking a method or a constructor
 
-urlString <- paste(getwd(),"/javatests/repicea.jar", sep="")
-addUrlToClassPath(urlString)
+path <- file.path(".","javatests","repicea.jar")
+#path <- file.path(".","tests","testthat", "javatests","repicea.jar")
+addToClassPath(path)
+myNullDoubleArray <- createJavaObject("double", 3, 3, isArray=T, isNullObject = T)
 
 out <- tryCatch(
   {
@@ -323,7 +257,7 @@ test_that("If the null array has been considered then there should be an excepti
 myException <- createJavaObject("java.lang.Exception")
 test_that("myException has been instantiated", {
   expect_equal("java.object" %in% class(myException), TRUE)
-  expect_equal(myException$class == "java.lang.Exception", TRUE)
+  expect_equal(myException$.class == "java.lang.Exception", TRUE)
 })
 
 #### Testing if the call to a non static method throws an exception when looking for a static method
@@ -391,9 +325,57 @@ test_that("Testing that the number of columns was correctly retrieved a Matrix i
 
 setJavaField(myMatrices, "m_iCols", as.integer(c(10,7)))
 newNbColumns <- getJavaField(myMatrices, "m_iCols")
-test_that("Testing that the number of columns was correctly retrieved a Matrix instance", {
+test_that("Testing that the number of columns was correctly set a Matrix instance", {
   expect_equal(newNbColumns, c(10,7))
 })
+
+
+vec <- c("carotte", "patate")
+expected <- callJavaMethod(vec, "length")
+observed <- callJavaMethod(as.factor(vec), "length")
+test_that("Testing that a factor source is processed as a character", {
+  expect_equal(length(which(expected != observed)) == 0, TRUE)
+})
+
+
+vec2 <- "a"
+expected <- callJavaMethod(as.factor(vec), "lastIndexOf", vec2)
+observed <- callJavaMethod(as.factor(vec), "lastIndexOf", as.factor(vec2))
+test_that("Testing that a factor source and a factor parameter are processed as characters", {
+  expect_equal(length(which(expected != observed)) == 0, TRUE)
+})
+
+length <- callJavaMethod("Hello world!", "length")
+test_that("Testing the length of a  character string", {
+  expect_equal(length, 12)
+})
+
+## Tests for primitve type wrappers
+
+a <- createJavaObject("java.lang.String", "Hello world!")
+test_that("Testing that a String created through the String constructor is returned as a primitive type", {
+  expect_equal(methods::is(a, "java.object") | methods::is(a, "java.list"), FALSE)
+  expect_equal(a, "Hello world!")
+})
+
+b <- createJavaObject("java.lang.String", rep("Hello world!",10))
+test_that("Testing that a String created through the String constructor is returned as a primitive type", {
+  expect_equal(methods::is(b, "java.object") | methods::is(b, "java.list"), FALSE)
+  expect_equal(length(b), 10)
+  expect_equal(length(which(b == "Hello world!")), 10)
+})
+
+c <- createJavaObject("java.lang.Integer", as.integer(1))
+test_that("Testing that a String created through the String constructor is returned as a primitive type", {
+  expect_equal(c, as.integer(1))
+})
+
+d <- createJavaObject("java.lang.Integer", as.integer(rep(1,10)))
+test_that("Testing that a String created through the String constructor is returned as a primitive type", {
+  expect_equal(length(d), 10)
+  expect_equal(length(which(d == as.integer(1))), 10)
+})
+
 
 shutdownJava()
 
